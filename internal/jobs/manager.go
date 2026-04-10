@@ -49,6 +49,12 @@ func NewManager(db *store.DB) *Manager {
 	}
 }
 
+// SetPollInterval overrides the dispatcher's poll frequency. Useful for
+// tests that need faster job discovery.
+func (m *Manager) SetPollInterval(d time.Duration) {
+	m.pollInterval = d
+}
+
 // Register associates a job type with a handler function.
 // Only one handler may be registered per type.
 func (m *Manager) Register(jobType store.JobType, handler Handler) {

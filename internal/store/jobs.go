@@ -80,10 +80,10 @@ func (db *DB) EnqueueJob(recordingID int64, jobType JobType) (int64, error) {
 //
 // The atomic fetch-and-update prevents two workers from claiming the same job.
 func (db *DB) ClaimNextPendingJob() (*Job, error) {
-	// Backoff: jobs that failed recently should wait before retry.
-	// We use finished_at for backoff since started_at is now set by workers.
-	// For first-attempt jobs, there's no prior finish, so they're eligible immediately.
-	row := db.conn.QueryRow(`
+	// Backoff: jobs that previously finished (with failure leading to retry)
+	// must wait attempt * backoffSecondsPerAttempt before being reclaimed.
+	// First-attempt jobs have finished_at NULL so are immediately eligible.
+	query := fmt.Sprintf(`
 		UPDATE jobs
 		SET status = 'running',
 		    attempt = attempt + 1
@@ -91,13 +91,15 @@ func (db *DB) ClaimNextPendingJob() (*Job, error) {
 			SELECT id FROM jobs
 			WHERE status = 'pending'
 			  AND (finished_at IS NULL
-			       OR datetime(finished_at, '+' || (attempt * 30) || ' seconds') <= datetime('now'))
+			       OR datetime(finished_at, '+' || (attempt * %d) || ' seconds') <= datetime('now'))
 			ORDER BY created_at
 			LIMIT 1
 		)
 		RETURNING id, recording_id, type, status, attempt, max_retries,
 		          COALESCE(error, ''), created_at
-	`)
+	`, db.backoffSecondsPerAttempt)
+
+	row := db.conn.QueryRow(query)
 
 	var j Job
 	var jobType, status, createdAt string
@@ -152,11 +154,13 @@ func (db *DB) MarkJobFailed(id int64, errMsg string) error {
 }
 
 // MarkJobPendingRetry returns a job to pending status for retry. The attempt
-// count was already incremented during ClaimNextPendingJob.
+// count was already incremented during ClaimNextPendingJob. Also sets
+// finished_at to now so the backoff window can be calculated on next claim.
 func (db *DB) MarkJobPendingRetry(id int64, errMsg string) error {
 	_, err := db.conn.Exec(`
 		UPDATE jobs
 		SET status = 'pending',
+		    finished_at = datetime('now'),
 		    error = ?
 		WHERE id = ?`, errMsg, id)
 	return err

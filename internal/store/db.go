@@ -10,6 +10,11 @@ import (
 // DB wraps the SQLite database connection.
 type DB struct {
 	conn *sql.DB
+	// backoffSecondsPerAttempt is used by ClaimNextPendingJob when computing
+	// how long a failed job must wait before retry. Multiplied by the job's
+	// attempt count — so after attempt 1 fails, the wait is 1*N; attempt 2, 2*N.
+	// Defaults to 30; tests override via SetBackoffSeconds.
+	backoffSecondsPerAttempt int
 }
 
 // Open opens (or creates) a SQLite database at the given path and runs migrations.
@@ -25,12 +30,21 @@ func Open(dbPath string) (*DB, error) {
 	// still allows readers to not block the writer.
 	conn.SetMaxOpenConns(1)
 
-	db := &DB{conn: conn}
+	db := &DB{
+		conn:                     conn,
+		backoffSecondsPerAttempt: 30,
+	}
 	if err := db.migrate(); err != nil {
 		return nil, fmt.Errorf("running migrations: %w", err)
 	}
 
 	return db, nil
+}
+
+// SetBackoffSeconds overrides the retry backoff multiplier. Used by tests
+// to run the retry/backoff logic without waiting real seconds.
+func (db *DB) SetBackoffSeconds(seconds int) {
+	db.backoffSecondsPerAttempt = seconds
 }
 
 // Close closes the database connection.
