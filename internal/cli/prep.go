@@ -3,15 +3,10 @@ package cli
 import (
 	"context"
 	"fmt"
-	"log/slog"
-	"os"
-	"path/filepath"
 	"strconv"
-	"strings"
-	"time"
 
-	"github.com/colton/audio-archive/internal/audio"
 	"github.com/colton/audio-archive/internal/config"
+	"github.com/colton/audio-archive/internal/pipeline"
 	"github.com/colton/audio-archive/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -42,55 +37,15 @@ func runPrep(cmd *cobra.Command, args []string) error {
 	}
 	defer db.Close()
 
-	rec, err := db.GetRecording(id)
+	result, err := pipeline.PrepRecording(context.Background(), cfg, db, id)
 	if err != nil {
-		return fmt.Errorf("recording not found: %w", err)
+		return err
 	}
 
-	if rec.PrepPath != "" {
-		prepAbs := filepath.Join(cfg.DataDir, rec.PrepPath)
-		if _, err := os.Stat(prepAbs); err == nil {
-			fmt.Printf("Already prepared: %s\n", prepAbs)
-			return nil
-		}
+	if result.Skipped {
+		fmt.Printf("Already prepared: %s\n", result.PrepPath)
+	} else {
+		fmt.Printf("Prepared: %s (%s)\n", result.PrepPath, result.Duration.Round(1e6))
 	}
-
-	// Build output path: same name but in processed/ with .prep.wav extension
-	masterAbs := filepath.Join(cfg.DataDir, rec.MasterPath)
-	base := filepath.Base(rec.MasterPath)
-	ext := filepath.Ext(base)
-	prepName := strings.TrimSuffix(base, ext) + ".prep.wav"
-
-	// Preserve year subdirectory structure
-	relDir := filepath.Dir(rec.MasterPath)                        // e.g. "masters/2024"
-	yearDir := strings.TrimPrefix(relDir, "masters")              // e.g. "/2024"
-	yearDir = strings.TrimPrefix(yearDir, string(os.PathSeparator))
-
-	prepDir := filepath.Join(cfg.ProcessedDir(), yearDir)
-	if err := os.MkdirAll(prepDir, 0755); err != nil {
-		return fmt.Errorf("creating processed dir: %w", err)
-	}
-
-	outputAbs := filepath.Join(prepDir, prepName)
-
-	slog.Info("preparing audio", "input", masterAbs, "output", outputAbs)
-	start := time.Now()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	if err := audio.PrepareAudio(ctx, cfg.Ffmpeg, masterAbs, outputAbs); err != nil {
-		return fmt.Errorf("audio preparation failed: %w", err)
-	}
-
-	elapsed := time.Since(start).Round(time.Millisecond)
-
-	// Update database with prep path
-	relPrepPath, _ := filepath.Rel(cfg.DataDir, outputAbs)
-	if err := db.UpdatePrepPath(id, relPrepPath); err != nil {
-		return fmt.Errorf("updating database: %w", err)
-	}
-
-	fmt.Printf("Prepared: %s (%s)\n", outputAbs, elapsed)
 	return nil
 }

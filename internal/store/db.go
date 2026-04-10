@@ -14,15 +14,16 @@ type DB struct {
 
 // Open opens (or creates) a SQLite database at the given path and runs migrations.
 func Open(dbPath string) (*DB, error) {
-	conn, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	conn, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
-	// Enable foreign keys
-	if _, err := conn.Exec("PRAGMA foreign_keys = ON"); err != nil {
-		return nil, fmt.Errorf("enabling foreign keys: %w", err)
-	}
+	// SQLite has one writer at a time. Serializing all access through a
+	// single connection eliminates SQLITE_BUSY errors when multiple
+	// goroutines (dispatcher + workers) hit the DB concurrently. WAL mode
+	// still allows readers to not block the writer.
+	conn.SetMaxOpenConns(1)
 
 	db := &DB{conn: conn}
 	if err := db.migrate(); err != nil {
