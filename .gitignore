@@ -1,0 +1,24 @@
+# Built binary
+/archive
+
+# Python virtual environment
+.venv/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Go
+*.test
+*.out
+coverage.txt
+
+# Local config or secrets (if added later)
+.env
+.env.local
