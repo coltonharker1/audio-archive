@@ -1,8 +1,10 @@
 # audio-archive
 
-A local pipeline for ingesting, prepping, transcribing, summarizing, and searching audio recordings — built for archiving digitized cassette and reel-to-reel tapes.
+A local pipeline for ingesting, prepping, transcribing, summarizing, and searching audio recordings — built for archiving digitized cassette and reel-to-reel tapes, generalized to handle any audio content (sermons, voicemails, audio diaries, musical performances, interviews, etc.).
 
 Everything runs locally. Go handles the pipeline, CLI, orchestration, and metadata. Python runs only the speech-to-text worker (`faster-whisper`). Summarization uses a local LLM via Ollama.
+
+> For design rationale, known issues, and how the pipeline thinks about hard problems, see [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Requirements
 
