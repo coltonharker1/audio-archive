@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/colton/audio-archive/internal/config"
 	"github.com/colton/audio-archive/internal/store"
@@ -62,34 +61,11 @@ func runShow(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Language: %s\n", tx.Language)
 	fmt.Printf("  Model:    %s\n", tx.ModelUsed)
 
-	// Show summary if available
+	// Show summary if available (uses the shared printSummary from summarize.go)
 	summary, sumErr := db.GetSummary(id)
 	if sumErr == nil {
 		fmt.Println("\n--- Summary ---")
-		if summary.SuggestedTitle != "" {
-			fmt.Printf("  Suggested Title: %s\n", summary.SuggestedTitle)
-		}
-		if summary.EstimatedEra != "" {
-			fmt.Printf("  Estimated Era:   %s\n", summary.EstimatedEra)
-		}
-		fmt.Printf("\n  %s\n", summary.SummaryShort)
-
-		if len(summary.MainTopics) > 0 {
-			fmt.Printf("\n  Topics: %s\n", strings.Join(summary.MainTopics, ", "))
-		}
-		if len(summary.BibleReferences) > 0 {
-			fmt.Println("\n  Bible References:")
-			for _, ref := range summary.BibleReferences {
-				if ref.Chapter > 0 {
-					fmt.Printf("    - %s %d:%d — %s\n", ref.Book, ref.Chapter, ref.Verse, ref.Text)
-				} else {
-					fmt.Printf("    - %s — %s\n", ref.Book, ref.Text)
-				}
-			}
-		}
-		if len(summary.Tags) > 0 {
-			fmt.Printf("\n  Tags: %s\n", strings.Join(summary.Tags, ", "))
-		}
+		printSummary(summary)
 	}
 
 	if showSegments {

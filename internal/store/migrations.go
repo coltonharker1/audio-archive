@@ -1,8 +1,15 @@
 package store
 
-// migrate runs schema migrations. For the MVP we use a simple version check
-// rather than a full migration framework — keeps dependencies light.
+import (
+	"database/sql"
+	"log/slog"
+)
+
+// migrate runs schema migrations. For the MVP we use CREATE TABLE IF NOT
+// EXISTS for initial creation and a simple per-version check for schema
+// changes that need to drop and recreate tables.
 func (db *DB) migrate() error {
+	// ---- Base tables ----
 	_, err := db.conn.Exec(`
 		CREATE TABLE IF NOT EXISTS recordings (
 			id          INTEGER PRIMARY KEY,
@@ -49,26 +56,19 @@ func (db *DB) migrate() error {
 			content='transcripts',
 			content_rowid='id'
 		);
-
-		CREATE TABLE IF NOT EXISTS summaries (
-			id                   INTEGER PRIMARY KEY,
-			recording_id         INTEGER NOT NULL REFERENCES recordings(id),
-			summary_short        TEXT,
-			summary_long         TEXT,
-			main_topics          TEXT,
-			notable_themes       TEXT,
-			bible_references     TEXT,
-			historical_references TEXT,
-			notable_quotes       TEXT,
-			tags                 TEXT,
-			suggested_title      TEXT,
-			suggested_speaker    TEXT,
-			estimated_era        TEXT,
-			model_used           TEXT,
-			created_at           TEXT DEFAULT (datetime('now'))
-		);
 	`)
 	if err != nil {
+		return err
+	}
+
+	// ---- Summaries table: schema v2 migration ----
+	// v1 had sermon-specific columns (summary_short, summary_long, main_topics,
+	//      bible_references, etc.).
+	// v2 uses a universal schema: (recording_type, summary_short, metadata JSON).
+	//
+	// Detection: v2 has a `metadata` column. If the summaries table exists
+	// without it, it's v1 and needs to be dropped and recreated.
+	if err := db.migrateSummariesV2(); err != nil {
 		return err
 	}
 
@@ -81,4 +81,73 @@ func (db *DB) migrate() error {
 		END;
 	`)
 	return err
+}
+
+// migrateSummariesV2 ensures the summaries table is in v2 format (universal
+// recording summary with a metadata JSON blob). If it detects v1 schema
+// (sermon-specific columns), it drops the table so the CREATE TABLE below
+// can recreate it in v2 format.
+//
+// Existing summary rows are lost on this migration — the user will need to
+// rerun `archive summarize` to regenerate them with the new structure.
+// This is a one-time cost and only affects the summaries table (transcripts,
+// recordings, jobs are preserved).
+func (db *DB) migrateSummariesV2() error {
+	hasTable, hasMetadata, err := inspectSummariesColumns(db.conn)
+	if err != nil {
+		return err
+	}
+
+	if hasTable && !hasMetadata {
+		slog.Warn("migrating summaries table from v1 (sermon-specific) to v2 (universal). " +
+			"Existing summary rows will be lost — re-run 'archive summarize' to regenerate.")
+		if _, err := db.conn.Exec(`DROP TABLE summaries`); err != nil {
+			return err
+		}
+	}
+
+	// Create v2 table if it doesn't exist (or was just dropped)
+	_, err = db.conn.Exec(`
+		CREATE TABLE IF NOT EXISTS summaries (
+			id             INTEGER PRIMARY KEY,
+			recording_id   INTEGER NOT NULL REFERENCES recordings(id),
+			recording_type TEXT,
+			summary_short  TEXT,
+			metadata       TEXT NOT NULL,
+			model_used     TEXT,
+			created_at     TEXT DEFAULT (datetime('now'))
+		);
+		CREATE INDEX IF NOT EXISTS idx_summaries_recording_id ON summaries(recording_id);
+		CREATE INDEX IF NOT EXISTS idx_summaries_recording_type ON summaries(recording_type);
+	`)
+	return err
+}
+
+// inspectSummariesColumns checks if the summaries table exists and whether
+// it has the v2 `metadata` column.
+func inspectSummariesColumns(conn *sql.DB) (hasTable, hasMetadata bool, err error) {
+	rows, err := conn.Query(`PRAGMA table_info('summaries')`)
+	if err != nil {
+		return false, false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		hasTable = true
+		var (
+			cid        int
+			name       string
+			ttype      string
+			notnull    int
+			dfltValue  sql.NullString
+			pk         int
+		)
+		if err := rows.Scan(&cid, &name, &ttype, &notnull, &dfltValue, &pk); err != nil {
+			return false, false, err
+		}
+		if name == "metadata" {
+			hasMetadata = true
+		}
+	}
+	return hasTable, hasMetadata, rows.Err()
 }

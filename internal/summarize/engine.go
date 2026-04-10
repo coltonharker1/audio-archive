@@ -74,7 +74,6 @@ func (e *Engine) Summarize(ctx context.Context, transcript string, debugDir stri
 		result.ChunkSummaries = append(result.ChunkSummaries, summary)
 	}
 
-	// Save intermediate chunk summaries
 	if debugDir != "" {
 		writeDebugFile(debugDir, "stage1_chunks.txt", formatChunksDebug(result.ChunkSummaries))
 	}
@@ -101,12 +100,10 @@ func (e *Engine) Summarize(ctx context.Context, transcript string, debugDir stri
 		writeDebugFile(debugDir, "stage2_merged.txt", merged)
 	}
 
-	// ---- Stage 3: Structured Metadata Extraction ----
+	// ---- Stage 3: Classification + Structured Extraction ----
 	// Pass both the merged narrative (for topics/themes/flow) and the chunk
-	// summaries (for exhaustive reference extraction). The merge stage tends
-	// to compress multiple references into fewer mentions; chunks preserve
-	// the full density.
-	slog.Info("stage 3: extracting structured metadata")
+	// summaries (for exhaustive entity/reference extraction).
+	slog.Info("stage 3: classifying and extracting structured metadata")
 
 	chunkBlob := strings.Join(numbered, "\n\n")
 	metadata, err := e.extractWithRetry(ctx, merged, chunkBlob, debugDir)
@@ -121,8 +118,9 @@ func (e *Engine) Summarize(ctx context.Context, transcript string, debugDir stri
 	}
 
 	slog.Info("summarization complete",
+		"type", metadata.RecordingType,
 		"topics", len(metadata.MainTopics),
-		"bible_refs", len(metadata.BibleReferences),
+		"people", len(metadata.People),
 		"tags", len(metadata.Tags),
 	)
 
@@ -131,7 +129,7 @@ func (e *Engine) Summarize(ctx context.Context, transcript string, debugDir stri
 
 // extractWithRetry attempts structured JSON extraction with retries.
 // On failure, it tries: (1) re-extraction, (2) JSON repair prompt, (3) give up.
-func (e *Engine) extractWithRetry(ctx context.Context, mergedSummary, chunkSummaries string, debugDir string) (*SermonSummary, error) {
+func (e *Engine) extractWithRetry(ctx context.Context, mergedSummary, chunkSummaries string, debugDir string) (*RecordingSummary, error) {
 	var lastRaw string
 	var lastErr error
 
@@ -140,7 +138,7 @@ func (e *Engine) extractWithRetry(ctx context.Context, mergedSummary, chunkSumma
 		var err error
 
 		if attempt <= 2 {
-			// Attempts 1-2: ask the model to extract structured data.
+			// Attempts 1-2: ask the model to classify + extract.
 			// Temperature 0.2 — low enough for consistent JSON, high enough
 			// that the model isn't overly conservative about what to extract.
 			raw, err = e.client.Generate(ctx, fmtExtractPrompt(mergedSummary, chunkSummaries), GenerateOpts{
@@ -166,7 +164,6 @@ func (e *Engine) extractWithRetry(ctx context.Context, mergedSummary, chunkSumma
 
 		lastRaw = raw
 
-		// Save raw response for debugging
 		if debugDir != "" {
 			writeDebugFile(debugDir, fmt.Sprintf("stage3_raw_attempt%d.txt", attempt), raw)
 		}
@@ -187,36 +184,42 @@ func (e *Engine) extractWithRetry(ctx context.Context, mergedSummary, chunkSumma
 }
 
 // jsonSchema is passed to Ollama's format parameter to constrain output.
-// Every field is marked required so the model cannot omit fields — it must
-// emit empty arrays or empty strings for unknowns instead.
+// Every universal field is required; the LLM must emit empty arrays or
+// empty strings for unknowns rather than omitting fields.
+//
+// type_specific is an open object — we don't constrain its shape because
+// it varies by recording_type.
 var jsonSchema = json.RawMessage(`{
 	"type": "object",
 	"properties": {
-		"summary_short": {"type": "string"},
-		"summary_long": {"type": "string"},
-		"main_topics": {"type": "array", "items": {"type": "string"}},
-		"notable_themes": {"type": "array", "items": {"type": "string"}},
-		"bible_references": {"type": "array", "items": {
-			"type": "object",
-			"properties": {
-				"book": {"type": "string"},
-				"chapter": {"type": "integer"},
-				"verse": {"type": "integer"},
-				"text": {"type": "string"}
-			},
-			"required": ["book", "chapter", "verse", "text"]
-		}},
-		"historical_references": {"type": "array", "items": {"type": "string"}},
-		"notable_quotes": {"type": "array", "items": {"type": "string"}},
-		"tags": {"type": "array", "items": {"type": "string"}},
-		"suggested_title": {"type": "string"},
-		"suggested_speaker": {"type": "string"},
-		"estimated_era": {"type": "string"}
+		"recording_type":   {"type": "string"},
+		"type_confidence":  {"type": "string"},
+		"summary_short":    {"type": "string"},
+		"summary_long":     {"type": "string"},
+		"suggested_title":  {"type": "string"},
+		"main_topics":      {"type": "array", "items": {"type": "string"}},
+		"themes":           {"type": "array", "items": {"type": "string"}},
+		"tags":             {"type": "array", "items": {"type": "string"}},
+		"people":           {"type": "array", "items": {"type": "string"}},
+		"places":           {"type": "array", "items": {"type": "string"}},
+		"organizations":    {"type": "array", "items": {"type": "string"}},
+		"dates_mentioned":  {"type": "array", "items": {"type": "string"}},
+		"estimated_era":    {"type": "string"},
+		"estimated_date":   {"type": "string"},
+		"notable_quotes":   {"type": "array", "items": {"type": "string"}},
+		"mood":             {"type": "string"},
+		"speakers":         {"type": "array", "items": {"type": "string"}},
+		"action_items":     {"type": "array", "items": {"type": "string"}},
+		"type_specific":    {"type": "object"}
 	},
 	"required": [
-		"summary_short", "summary_long", "main_topics", "notable_themes",
-		"bible_references", "historical_references", "notable_quotes",
-		"tags", "suggested_title", "suggested_speaker", "estimated_era"
+		"recording_type", "type_confidence",
+		"summary_short", "summary_long", "suggested_title",
+		"main_topics", "themes", "tags",
+		"people", "places", "organizations", "dates_mentioned",
+		"estimated_era", "estimated_date",
+		"notable_quotes", "mood", "speakers", "action_items",
+		"type_specific"
 	]
 }`)
 
@@ -247,11 +250,11 @@ func chunkTranscript(text string, budgetWords, overlapWords int) []string {
 	return chunks
 }
 
-// parseSummaryJSON attempts to parse the LLM's response as SermonSummary JSON.
+// parseSummaryJSON attempts to parse the LLM's response as RecordingSummary JSON.
 // It normalizes nil slices to empty slices so downstream JSON output never
 // emits `null` for list fields.
-func parseSummaryJSON(raw string) (*SermonSummary, error) {
-	var summary SermonSummary
+func parseSummaryJSON(raw string) (*RecordingSummary, error) {
+	var summary RecordingSummary
 
 	// Try direct parse
 	if err := json.Unmarshal([]byte(raw), &summary); err == nil {
@@ -282,33 +285,61 @@ func parseSummaryJSON(raw string) (*SermonSummary, error) {
 
 // normalizeSummary ensures slice fields are never nil (nil marshals as null;
 // empty slice marshals as []) and cleans up common model quirks.
-func normalizeSummary(s *SermonSummary) {
+func normalizeSummary(s *RecordingSummary) {
 	if s.MainTopics == nil {
 		s.MainTopics = []string{}
 	}
-	if s.NotableThemes == nil {
-		s.NotableThemes = []string{}
-	}
-	if s.BibleReferences == nil {
-		s.BibleReferences = []BibleReference{}
-	}
-	if s.HistoricalRefs == nil {
-		s.HistoricalRefs = []string{}
-	}
-	if s.NotableQuotes == nil {
-		s.NotableQuotes = []string{}
+	if s.Themes == nil {
+		s.Themes = []string{}
 	}
 	if s.Tags == nil {
 		s.Tags = []string{}
 	}
+	if s.People == nil {
+		s.People = []string{}
+	}
+	if s.Places == nil {
+		s.Places = []string{}
+	}
+	if s.Organizations == nil {
+		s.Organizations = []string{}
+	}
+	if s.DatesMentioned == nil {
+		s.DatesMentioned = []string{}
+	}
+	if s.NotableQuotes == nil {
+		s.NotableQuotes = []string{}
+	}
+	if s.Speakers == nil {
+		s.Speakers = []string{}
+	}
+	if s.ActionItems == nil {
+		s.ActionItems = []string{}
+	}
+	if s.TypeSpecific == nil {
+		s.TypeSpecific = map[string]any{}
+	}
+
 	// Strip common placeholder values the model uses when it should be empty
-	if strings.EqualFold(s.EstimatedEra, "unknown") || strings.EqualFold(s.EstimatedEra, "n/a") {
-		s.EstimatedEra = ""
+	clearIfPlaceholder := func(field *string) {
+		if field == nil {
+			return
+		}
+		lower := strings.ToLower(strings.TrimSpace(*field))
+		if lower == "unknown" || lower == "n/a" || lower == "none" || lower == "null" {
+			*field = ""
+		}
 	}
-	if strings.EqualFold(s.SuggestedSpeaker, "unknown") || strings.EqualFold(s.SuggestedSpeaker, "n/a") {
-		s.SuggestedSpeaker = ""
+	clearIfPlaceholder(&s.EstimatedEra)
+	clearIfPlaceholder(&s.EstimatedDate)
+	clearIfPlaceholder(&s.Mood)
+
+	// Default recording type to "other" if the LLM didn't classify
+	if s.RecordingType == "" {
+		s.RecordingType = TypeOther
 	}
-	// Lowercase tags and strip spaces (replace with hyphens)
+
+	// Lowercase tags and replace spaces with hyphens
 	for i, t := range s.Tags {
 		t = strings.TrimSpace(strings.ToLower(t))
 		t = strings.ReplaceAll(t, " ", "-")

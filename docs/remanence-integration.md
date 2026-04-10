@@ -3,6 +3,14 @@
 > Status: **Future work / north star.** Nothing here is built yet. This document
 > captures the design so it's not lost while audio-archive itself is being
 > solidified.
+>
+> **Note (April 2026):** audio-archive's metadata structure has since been
+> generalized beyond sermons — `SermonSummary` was replaced with a universal
+> `RecordingSummary` that classifies recordings into types (sermon, voicemail,
+> interview, musical_performance, audio_diary, etc.) and stores type-specific
+> fields in a `type_specific` map. This doc still uses sermon examples but
+> the field mapping applies to any recording type, with `type_specific`
+> flowing into `metadata.type_specific` on the remanence side.
 
 ## Goal
 

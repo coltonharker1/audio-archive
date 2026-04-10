@@ -1,30 +1,36 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 
 	"github.com/colton/audio-archive/internal/summarize"
 )
 
-// SaveSummary stores a sermon summary in the database.
-func (db *DB) SaveSummary(recordingID int64, summary *summarize.SermonSummary, modelUsed string) (int64, error) {
-	topicsJSON, _ := json.Marshal(summary.MainTopics)
-	themesJSON, _ := json.Marshal(summary.NotableThemes)
-	refsJSON, _ := json.Marshal(summary.BibleReferences)
-	histJSON, _ := json.Marshal(summary.HistoricalRefs)
-	quotesJSON, _ := json.Marshal(summary.NotableQuotes)
-	tagsJSON, _ := json.Marshal(summary.Tags)
+// SaveSummary stores a recording summary as a JSON blob.
+// The recording_type and summary_short are also denormalized into their
+// own columns for efficient filtering/listing.
+func (db *DB) SaveSummary(recordingID int64, summary *summarize.RecordingSummary, modelUsed string) (int64, error) {
+	metadataJSON, err := json.Marshal(summary)
+	if err != nil {
+		return 0, fmt.Errorf("marshaling summary: %w", err)
+	}
+
+	// Delete any previous summary for this recording so we don't pile up
+	// duplicates when re-running `archive summarize`.
+	if _, err := db.conn.Exec(`DELETE FROM summaries WHERE recording_id = ?`, recordingID); err != nil {
+		return 0, fmt.Errorf("clearing previous summary: %w", err)
+	}
 
 	res, err := db.conn.Exec(`
-		INSERT INTO summaries (recording_id, summary_short, summary_long,
-			main_topics, notable_themes, bible_references, historical_references,
-			notable_quotes, tags, suggested_title, suggested_speaker, estimated_era, model_used)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		recordingID, summary.SummaryShort, summary.SummaryLong,
-		string(topicsJSON), string(themesJSON), string(refsJSON), string(histJSON),
-		string(quotesJSON), string(tagsJSON), summary.SuggestedTitle,
-		summary.SuggestedSpeaker, summary.EstimatedEra, modelUsed,
+		INSERT INTO summaries (recording_id, recording_type, summary_short, metadata, model_used)
+		VALUES (?, ?, ?, ?, ?)`,
+		recordingID,
+		string(summary.RecordingType),
+		summary.SummaryShort,
+		string(metadataJSON),
+		modelUsed,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("inserting summary: %w", err)
@@ -33,32 +39,24 @@ func (db *DB) SaveSummary(recordingID int64, summary *summarize.SermonSummary, m
 }
 
 // GetSummary retrieves a summary by recording ID.
-func (db *DB) GetSummary(recordingID int64) (*summarize.SermonSummary, error) {
-	row := db.conn.QueryRow(`
-		SELECT summary_short, summary_long, main_topics, notable_themes,
-		       bible_references, historical_references, notable_quotes, tags,
-		       suggested_title, suggested_speaker, estimated_era
-		FROM summaries WHERE recording_id = ?`, recordingID)
+// Returns sql.ErrNoRows if no summary exists.
+func (db *DB) GetSummary(recordingID int64) (*summarize.RecordingSummary, error) {
+	var metadataJSON string
+	err := db.conn.QueryRow(`
+		SELECT metadata FROM summaries WHERE recording_id = ? ORDER BY id DESC LIMIT 1`,
+		recordingID,
+	).Scan(&metadataJSON)
 
-	s := &summarize.SermonSummary{}
-	var topicsJSON, themesJSON, refsJSON, histJSON, quotesJSON, tagsJSON string
-
-	err := row.Scan(
-		&s.SummaryShort, &s.SummaryLong,
-		&topicsJSON, &themesJSON, &refsJSON, &histJSON,
-		&quotesJSON, &tagsJSON,
-		&s.SuggestedTitle, &s.SuggestedSpeaker, &s.EstimatedEra,
-	)
+	if err == sql.ErrNoRows {
+		return nil, err
+	}
 	if err != nil {
 		return nil, fmt.Errorf("getting summary: %w", err)
 	}
 
-	json.Unmarshal([]byte(topicsJSON), &s.MainTopics)
-	json.Unmarshal([]byte(themesJSON), &s.NotableThemes)
-	json.Unmarshal([]byte(refsJSON), &s.BibleReferences)
-	json.Unmarshal([]byte(histJSON), &s.HistoricalRefs)
-	json.Unmarshal([]byte(quotesJSON), &s.NotableQuotes)
-	json.Unmarshal([]byte(tagsJSON), &s.Tags)
-
-	return s, nil
+	var summary summarize.RecordingSummary
+	if err := json.Unmarshal([]byte(metadataJSON), &summary); err != nil {
+		return nil, fmt.Errorf("parsing stored summary: %w", err)
+	}
+	return &summary, nil
 }

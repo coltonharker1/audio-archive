@@ -17,7 +17,7 @@ import (
 
 // SummarizeResult is returned on successful summarization.
 type SummarizeResult struct {
-	Summary   *summarize.SermonSummary
+	Summary   *summarize.RecordingSummary
 	MetaPath  string
 	DebugDir  string
 	Duration  time.Duration
