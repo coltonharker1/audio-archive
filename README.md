@@ -31,6 +31,9 @@ ollama pull mistral
 # Ingest a recording into the archive
 ./archive ingest sermon.wav --speaker "Pastor Name" --date 2024-01-07 --title "Morning Service"
 
+# Batch ingest a whole directory of files
+./archive ingest-dir ~/Tapes/1968/ --recursive --speaker "Pastor Name"
+
 # Prepare audio (normalize, filter, downconvert to 16kHz mono)
 ./archive prep <id>
 
@@ -47,6 +50,25 @@ ollama pull mistral
 ./archive list
 ./archive show <id>
 ./archive search "some phrase"
+```
+
+## Background job queue
+
+The pipeline stages can also run asynchronously via a background worker,
+with automatic retries and crash recovery.
+
+```bash
+# Enqueue jobs for a recording (prep, transcribe, summarize, or all)
+./archive enqueue <id> all
+
+# Batch ingest + enqueue full pipeline for every file
+./archive ingest-dir ~/Tapes/1968/ --run
+
+# Start the worker (blocks until Ctrl+C)
+./archive worker
+
+# Inspect queue state
+./archive status
 ```
 
 ## Data Layout
@@ -81,3 +103,7 @@ Three stages, all in Go:
 3. **Structured metadata extraction** — extracts JSON metadata (topics, Bible references, tags, quotes) from both the merged summary and the chunk summaries
 
 Intermediate outputs are saved to `~/.audio-archive/metadata/YYYY/<name>_debug/` for inspection.
+
+## Future work
+
+- **Remanence Archive integration** — push processed recordings (audio + transcript + structured summary) upstream into [remanence-archive](https://github.com/coltonharker1/remanence-archive) as browsable catalog records. Design sketched in [docs/remanence-integration.md](docs/remanence-integration.md).
