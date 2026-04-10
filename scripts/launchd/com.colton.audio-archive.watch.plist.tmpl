@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.colton.audio-archive.watch</string>
+
+    <!-- The archive binary and its arguments -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{ARCHIVE_BIN}}</string>
+        <string>watch</string>
+        <string>{{INBOX_DIR}}</string>
+    </array>
+
+    <!-- Start at login -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart if the process crashes -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Working directory set to project root so config.findProjectRoot()
+         locates the Python venv and worker.py correctly -->
+    <key>WorkingDirectory</key>
+    <string>{{PROJECT_ROOT}}</string>
+
+    <!-- launchd doesn't inherit the user's shell PATH. Explicitly include
+         Homebrew locations so ffmpeg/ffprobe/python3 are found. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <!-- Logs go to ~/.audio-archive/logs/ — tail them with `make logs` -->
+    <key>StandardOutPath</key>
+    <string>{{DATA_DIR}}/logs/watch.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>{{DATA_DIR}}/logs/watch.err</string>
+
+    <!-- Background = lower priority, doesn't interfere with interactive apps -->
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

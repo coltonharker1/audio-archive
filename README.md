@@ -71,6 +71,48 @@ with automatic retries and crash recovery.
 ./archive status
 ```
 
+## Inbox auto-processing (recommended workflow)
+
+Drop audio files in `~/audio-inbox/` and have them automatically ingested,
+prepped, transcribed, and summarized in the background — no manual commands.
+
+```bash
+# One-time setup: build, install launchd agents, start the daemons
+make install-daemons
+```
+
+This installs two macOS launchd agents that start at login and restart if
+they crash:
+
+- **`watch` daemon** — monitors `~/audio-inbox/` for new files (via fsnotify)
+  and waits for each file's size to stabilize before ingesting. Files already
+  being copied are not processed mid-write.
+- **`worker` daemon** — processes the job queue (prep → transcribe → summarize)
+  with retries and crash recovery.
+
+After that, drop any audio file (wav, mp3, m4a, flac, aiff, aac, ogg, opus)
+into the inbox and it will be automatically processed.
+
+```bash
+# See whether the daemons are running
+make daemons-status
+
+# Tail the logs
+make logs
+
+# Rebuild after code changes and restart the daemons
+make reinstall-daemons
+
+# Remove the daemons
+make uninstall-daemons
+```
+
+You can also run the watcher manually (without launchd) for testing:
+
+```bash
+./archive watch ~/audio-inbox --stable-delay 3s
+```
+
 ## Data Layout
 
 Archive data lives in `~/.audio-archive/`:

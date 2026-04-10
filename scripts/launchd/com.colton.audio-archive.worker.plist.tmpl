@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.colton.audio-archive.worker</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{ARCHIVE_BIN}}</string>
+        <string>worker</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Working directory is the project root so the worker can find the
+         Python venv (.venv/bin/python) and the transcribe.py worker script.
+         config.findProjectRoot() walks up from cwd looking for go.mod. -->
+    <key>WorkingDirectory</key>
+    <string>{{PROJECT_ROOT}}</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>{{DATA_DIR}}/logs/worker.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>{{DATA_DIR}}/logs/worker.err</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
