@@ -125,11 +125,11 @@ var typeSpecificFieldGuide = map[RecordingType][]typeSpecificField{
 		{Name: "preaching_style", Desc: "expository, topical, narrative, evangelistic, etc."},
 	},
 	TypeVoicemail: {
-		{Name: "caller_identity", Desc: "name or description of who left the message"},
-		{Name: "recipient", Desc: "who the message was for"},
-		{Name: "callback_requested", Desc: "true/false — did they ask for a call back"},
-		{Name: "urgency", Desc: "low, medium, or high"},
-		{Name: "callback_number", Desc: "phone number to call back if given"},
+		{Name: "caller_identity", Desc: "name of who left the message if stated, otherwise empty string"},
+		{Name: "recipient", Desc: "name of who the message is addressed to. Look for goodbye patterns like 'All right, Martin' or greeting patterns like 'Hey Sarah' — that name is the recipient. Leave empty only if no recipient is addressed by name"},
+		{Name: "callback_requested", Desc: "true if the caller asks to be called back, false otherwise"},
+		{Name: "urgency", Desc: "low, medium, or high — based on tone and content (emergencies = high, casual check-ins = low)"},
+		{Name: "callback_number", Desc: "phone number to call back if the caller states one, otherwise empty string"},
 	},
 	TypePhoneCall: {
 		{Name: "participants", Desc: "array of people on the call"},
