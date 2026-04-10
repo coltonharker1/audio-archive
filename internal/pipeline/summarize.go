@@ -37,9 +37,11 @@ func SummarizeRecording(ctx context.Context, cfg config.Config, db *store.DB, re
 		return nil, fmt.Errorf("no transcript — transcribe first: %w", err)
 	}
 
-	if strings.TrimSpace(tx.FullText) == "" {
-		return nil, fmt.Errorf("transcript is empty")
-	}
+	// Note: we no longer error on empty transcripts. An empty transcript
+	// combined with the recording's duration is a strong signal to the
+	// classifier that this is a non-speech recording (music, field recording,
+	// ambient). The engine handles this by skipping chunk/merge stages and
+	// synthesizing a minimal input for the extraction step.
 
 	// Set up debug directory (per-recording)
 	baseName := strings.TrimSuffix(filepath.Base(rec.MasterPath), filepath.Ext(filepath.Base(rec.MasterPath)))
@@ -60,7 +62,13 @@ func SummarizeRecording(ctx context.Context, cfg config.Config, db *store.DB, re
 	defer cancel()
 
 	engine := summarize.NewEngine(cfg.OllamaModel)
-	result, err := engine.Summarize(sumCtx, tx.FullText, debugDir)
+	result, err := engine.Summarize(sumCtx, summarize.SummarizeInput{
+		Transcript: tx.FullText,
+		DurationMs: rec.DurationMs,
+		Title:      rec.Title,
+		SourceName: filepath.Base(rec.MasterPath),
+		DebugDir:   debugDir,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("summarization engine: %w", err)
 	}

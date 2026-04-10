@@ -53,7 +53,13 @@ Write the combined summary as plain text, 4-6 paragraphs. If specific details ap
 
 const extractPromptHeader = `You are analyzing an audio recording and producing structured metadata. The recording was transcribed from audio, so there may be speech-to-text errors in names and references.
 
-You are given TWO sources:
+You are given the following inputs:
+
+=== FILE METADATA (use as a classification signal, especially when speech is sparse) ===
+%s
+
+=== AUDIO SIGNAL HINT (critical for classification) ===
+%s
 
 === SOURCE A: Narrative Summary (use for topics, themes, long summary, title) ===
 %s
@@ -91,6 +97,23 @@ STEP 2: Extract UNIVERSAL fields that apply to any recording:
 - action_items: tasks, requests, or callbacks mentioned (empty array if none)
 
 STEP 3: Based on the recording_type you chose in STEP 1, populate the "type_specific" object with fields relevant to that type.
+
+CRITICAL RULE FOR type_specific STRUCTURE:
+The type-specific fields must go DIRECTLY at the top level of type_specific. Do NOT nest them inside a sub-object named after the recording type.
+
+CORRECT:
+  "type_specific": {
+    "bible_references": [...],
+    "theological_themes": [...]
+  }
+
+INCORRECT (do NOT do this):
+  "type_specific": {
+    "sermon": {
+      "bible_references": [...],
+      "theological_themes": [...]
+    }
+  }
 
 TYPE-SPECIFIC FIELDS BY RECORDING TYPE:
 
@@ -130,12 +153,24 @@ func fmtMergePrompt(sectionSummaries string) string {
 
 // fmtExtractPrompt builds the extraction prompt with classification taxonomy
 // and per-type field guidance baked in dynamically from typeSpecificFieldGuide.
-func fmtExtractPrompt(mergedSummary, chunkSummaries string) string {
-	header := fmt.Sprintf(extractPromptHeader, mergedSummary, chunkSummaries)
+// The density hint and file context are injected so the classifier has
+// multiple signals beyond just the transcript content.
+func fmtExtractPrompt(mergedSummary, chunkSummaries string, density SpeechDensity, fileContext string) string {
+	densityHint := formatDensityHint(density)
+	header := fmt.Sprintf(extractPromptHeader, fileContext, densityHint, mergedSummary, chunkSummaries)
 	steps := fmt.Sprintf(extractPromptSteps,
 		buildTypeTaxonomy(),
 		buildTypeSpecificGuide())
 	return header + steps
+}
+
+// formatDensityHint produces the audio signal hint paragraph for the prompt.
+// If density is unknown (zero), returns a neutral placeholder.
+func formatDensityHint(d SpeechDensity) string {
+	if d.Description == "" {
+		return "No audio-level speech density information is available."
+	}
+	return d.Description
 }
 
 func fmtRepairPrompt(brokenJSON string) string {

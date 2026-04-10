@@ -273,6 +273,177 @@ func TestChunkBudget_LargeContextModel(t *testing.T) {
 	}
 }
 
+// ---- flattenTypeSpecific ----
+
+func TestFlattenTypeSpecific_NestedUnderTypeKey(t *testing.T) {
+	s := &RecordingSummary{
+		RecordingType: TypeSermon,
+		TypeSpecific: map[string]any{
+			"sermon": map[string]any{
+				"bible_references":   []any{"Rev 13:4"},
+				"scripture_focus":    "Revelation 13",
+				"theological_themes": []any{"eschatology"},
+			},
+		},
+	}
+
+	flattenTypeSpecific(s)
+
+	if _, stillNested := s.TypeSpecific["sermon"]; stillNested {
+		t.Error("sermon key should have been flattened")
+	}
+	if _, ok := s.TypeSpecific["scripture_focus"]; !ok {
+		t.Error("scripture_focus should be at top level after flatten")
+	}
+	if _, ok := s.TypeSpecific["bible_references"]; !ok {
+		t.Error("bible_references should be at top level after flatten")
+	}
+}
+
+func TestFlattenTypeSpecific_NotNested(t *testing.T) {
+	s := &RecordingSummary{
+		RecordingType: TypeSermon,
+		TypeSpecific: map[string]any{
+			"scripture_focus": "Revelation 13",
+		},
+	}
+
+	flattenTypeSpecific(s)
+
+	if got := s.TypeSpecific["scripture_focus"]; got != "Revelation 13" {
+		t.Errorf("unexpected change: %v", got)
+	}
+}
+
+func TestFlattenTypeSpecific_DifferentKeyNotFlattened(t *testing.T) {
+	// If type_specific has a sub-object whose key doesn't match the recording
+	// type, leave it alone — it's probably a legitimate nested field.
+	s := &RecordingSummary{
+		RecordingType: TypeSermon,
+		TypeSpecific: map[string]any{
+			"unrelated_key": map[string]any{"foo": "bar"},
+		},
+	}
+
+	flattenTypeSpecific(s)
+
+	nested, ok := s.TypeSpecific["unrelated_key"].(map[string]any)
+	if !ok {
+		t.Fatal("unrelated nested key was incorrectly flattened")
+	}
+	if nested["foo"] != "bar" {
+		t.Error("nested value corrupted")
+	}
+}
+
+// ---- cleanTypeSpecific ----
+
+func TestCleanTypeSpecific_RemovesPlaceholders(t *testing.T) {
+	m := map[string]any{
+		"location":    "Unknown",
+		"environment": "indoor",
+		"style":       "N/A",
+		"notes":       "",
+	}
+	cleanTypeSpecific(m)
+
+	if _, ok := m["location"]; ok {
+		t.Error("'Unknown' location should be removed")
+	}
+	if m["environment"] != "indoor" {
+		t.Error("real value should be preserved")
+	}
+	if _, ok := m["style"]; ok {
+		t.Error("'N/A' should be removed")
+	}
+	if _, ok := m["notes"]; ok {
+		t.Error("empty string should be removed")
+	}
+}
+
+func TestCleanTypeSpecific_CleansNestedMaps(t *testing.T) {
+	m := map[string]any{
+		"details": map[string]any{
+			"venue":  "Unknown",
+			"crowd":  "large",
+			"notes":  "n/a",
+		},
+		"name": "valid",
+	}
+	cleanTypeSpecific(m)
+
+	details, ok := m["details"].(map[string]any)
+	if !ok {
+		t.Fatal("details should still be a map")
+	}
+	if _, exists := details["venue"]; exists {
+		t.Error("nested 'Unknown' should be removed")
+	}
+	if details["crowd"] != "large" {
+		t.Error("real nested value should be preserved")
+	}
+}
+
+func TestCleanTypeSpecific_RemovesEmptyArrayItems(t *testing.T) {
+	m := map[string]any{
+		"pieces": []any{"Ave Maria", "Unknown", "N/A", "Clair de Lune"},
+	}
+	cleanTypeSpecific(m)
+
+	pieces, ok := m["pieces"].([]any)
+	if !ok {
+		t.Fatal("pieces should still be an array")
+	}
+	if len(pieces) != 2 {
+		t.Errorf("expected 2 items after cleaning, got %d: %v", len(pieces), pieces)
+	}
+}
+
+// ---- computeSpeechDensity ----
+
+func TestComputeSpeechDensity_NormalSpeech(t *testing.T) {
+	// 10 minutes with 1500 words = 150 wpm
+	d := computeSpeechDensity(1500, 10*60*1000)
+	if d.Classification != "normal" {
+		t.Errorf("1500/10min = %s, want normal", d.Classification)
+	}
+	if d.WordsPerMinute < 149 || d.WordsPerMinute > 151 {
+		t.Errorf("wpm = %f, want ~150", d.WordsPerMinute)
+	}
+}
+
+func TestComputeSpeechDensity_Minimal(t *testing.T) {
+	// 35 minutes with ~450 words (the accordion case)
+	// But actually without VAD hallucinations, it'd be closer to 0
+	d := computeSpeechDensity(50, 35*60*1000)
+	if d.Classification != "minimal" {
+		t.Errorf("50/35min = %s, want minimal", d.Classification)
+	}
+}
+
+func TestComputeSpeechDensity_Sparse(t *testing.T) {
+	// 10 min with 200 words = 20 wpm
+	d := computeSpeechDensity(200, 10*60*1000)
+	if d.Classification != "sparse" {
+		t.Errorf("200/10min = %s, want sparse", d.Classification)
+	}
+}
+
+func TestComputeSpeechDensity_Slow(t *testing.T) {
+	// 10 min with 600 words = 60 wpm
+	d := computeSpeechDensity(600, 10*60*1000)
+	if d.Classification != "slow" {
+		t.Errorf("600/10min = %s, want slow", d.Classification)
+	}
+}
+
+func TestComputeSpeechDensity_ZeroDuration(t *testing.T) {
+	d := computeSpeechDensity(100, 0)
+	if d.Description != "" {
+		t.Error("zero duration should yield empty density")
+	}
+}
+
 // ---- Known types completeness ----
 
 func TestKnownRecordingTypesCoversConstants(t *testing.T) {

@@ -19,7 +19,18 @@ def transcribe(audio_path, model_size="base"):
     model = WhisperModel(model_size, device="cpu", compute_type="int8")
 
     print(f"Transcribing: {audio_path}", file=sys.stderr)
-    segments, info = model.transcribe(audio_path, beam_size=5)
+    # vad_filter=True skips non-speech regions (music, silence, ambient noise)
+    # before running Whisper. Without this, Whisper frequently hallucinates
+    # repeated phrases when transcribing music-heavy or ambient recordings.
+    #
+    # min_silence_duration_ms=500 groups speech segments separated by less
+    # than half a second, reducing over-segmentation on natural pauses.
+    segments, info = model.transcribe(
+        audio_path,
+        beam_size=5,
+        vad_filter=True,
+        vad_parameters={"min_silence_duration_ms": 500},
+    )
 
     result = {
         "language": info.language,
