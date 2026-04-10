@@ -73,22 +73,25 @@ func (db *DB) EnqueueJob(recordingID int64, jobType JobType) (int64, error) {
 // it as running, returning the claimed job. It skips jobs that have been
 // updated recently (for retry backoff). Returns ErrNoJob if nothing is ready.
 //
+// Note: the claim increments attempt and sets status=running, but leaves
+// started_at to be set by the worker via MarkJobStarted once execution
+// actually begins. This way started_at reflects real work time, not the
+// wait time in the channel buffer between dispatcher and worker.
+//
 // The atomic fetch-and-update prevents two workers from claiming the same job.
 func (db *DB) ClaimNextPendingJob() (*Job, error) {
 	// Backoff: jobs that failed recently should wait before retry.
-	// We compute the earliest eligible time as now() - (attempt * 30s).
-	// A job is eligible if status='pending' AND started_at IS NULL OR
-	// started_at older than the backoff threshold.
+	// We use finished_at for backoff since started_at is now set by workers.
+	// For first-attempt jobs, there's no prior finish, so they're eligible immediately.
 	row := db.conn.QueryRow(`
 		UPDATE jobs
 		SET status = 'running',
-		    started_at = datetime('now'),
 		    attempt = attempt + 1
 		WHERE id = (
 			SELECT id FROM jobs
 			WHERE status = 'pending'
-			  AND (started_at IS NULL
-			       OR datetime(started_at, '+' || (attempt * 30) || ' seconds') <= datetime('now'))
+			  AND (finished_at IS NULL
+			       OR datetime(finished_at, '+' || (attempt * 30) || ' seconds') <= datetime('now'))
 			ORDER BY created_at
 			LIMIT 1
 		)
@@ -114,6 +117,16 @@ func (db *DB) ClaimNextPendingJob() (*Job, error) {
 	j.Status = JobStatus(status)
 	j.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
 	return &j, nil
+}
+
+// MarkJobStarted records the real execution start time. Called by workers
+// when they actually begin running a claimed job (not when it's queued).
+func (db *DB) MarkJobStarted(id int64) error {
+	_, err := db.conn.Exec(`
+		UPDATE jobs
+		SET started_at = datetime('now')
+		WHERE id = ?`, id)
+	return err
 }
 
 // MarkJobComplete transitions a job to complete status.

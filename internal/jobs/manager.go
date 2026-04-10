@@ -194,6 +194,11 @@ func (m *Manager) executeJob(ctx context.Context, workerID int, job store.Job) {
 		"attempt", job.Attempt,
 		"max_retries", job.MaxRetries)
 
+	// Record the actual execution start time, distinct from the claim time.
+	if err := m.db.MarkJobStarted(job.ID); err != nil {
+		slog.Warn("failed to mark job started", "job", job.ID, "error", err)
+	}
+
 	start := time.Now()
 	err := handler(ctx, job)
 	elapsed := time.Since(start).Round(time.Millisecond)
