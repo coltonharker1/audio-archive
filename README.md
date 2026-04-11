@@ -2,7 +2,7 @@
 
 A local pipeline for ingesting, prepping, transcribing, summarizing, and searching audio recordings — built for archiving digitized cassette and reel-to-reel tapes, generalized to handle any audio content (sermons, voicemails, audio diaries, musical performances, interviews, etc.).
 
-Everything runs locally. Go handles the pipeline, CLI, orchestration, and metadata. Python runs only the speech-to-text worker (`faster-whisper`). Summarization uses a local LLM via Ollama.
+Everything runs locally. Go handles the pipeline, CLI, orchestration, and metadata. Transcription runs through [whisper.cpp](https://github.com/ggerganov/whisper.cpp) with Metal acceleration on Apple Silicon. Summarization uses a local LLM via Ollama.
 
 > For design rationale, known issues, and how the pipeline thinks about hard problems, see [docs/DESIGN.md](docs/DESIGN.md).
 
@@ -10,7 +10,7 @@ Everything runs locally. Go handles the pipeline, CLI, orchestration, and metada
 
 - Go 1.22+
 - FFmpeg and FFprobe (`brew install ffmpeg`)
-- Python 3 (for the transcription worker)
+- whisper.cpp (`brew install whisper-cpp`)
 - [Ollama](https://ollama.com) (for summarization)
 
 ## Setup
@@ -19,9 +19,12 @@ Everything runs locally. Go handles the pipeline, CLI, orchestration, and metada
 # Build the CLI
 go build -o archive ./cmd/archive/
 
-# Set up the Python transcription worker
-python3 -m venv .venv
-.venv/bin/pip install -r worker/requirements.txt
+# Download the whisper.cpp speech model and VAD model (one-time, ~142 MB total)
+mkdir -p ~/.audio-archive/models
+curl -L -o ~/.audio-archive/models/ggml-base.en.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+curl -L -o ~/.audio-archive/models/ggml-silero-v5.1.2.bin \
+  https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin
 
 # Pull an Ollama model for summarization
 ollama pull mistral
@@ -39,8 +42,8 @@ ollama pull mistral
 # Prepare audio (normalize, filter, downconvert to 16kHz mono)
 ./archive prep <id>
 
-# Transcribe with faster-whisper
-./archive transcribe <id> --model base
+# Transcribe with whisper.cpp (Metal-accelerated)
+./archive transcribe <id>
 
 # Summarize with local LLM
 ./archive summarize <id>
@@ -125,15 +128,16 @@ Archive data lives in `~/.audio-archive/`:
 ├── masters/YYYY/              # Original untouched recordings
 ├── processed/YYYY/            # FFmpeg-prepped audio (16kHz mono WAV)
 ├── transcripts/YYYY/          # Plain text + timestamped JSON
-└── metadata/YYYY/             # Structured summaries + debug files
+├── metadata/YYYY/             # Structured summaries + debug files
+└── models/                    # whisper.cpp GGML model files
 ```
 
 Original master files are never modified. All processing produces separate files.
 
 ## Architecture
 
-- **Go** — CLI, pipeline orchestration, database, FFmpeg calls, Ollama HTTP client, job management
-- **Python** — transcription worker only (`worker/transcribe.py` using `faster-whisper`)
+- **Go** — CLI, pipeline orchestration, database, FFmpeg calls, whisper.cpp invocation, Ollama HTTP client, job management
+- **whisper.cpp** — native C++ Whisper, Metal-accelerated on Apple Silicon, invoked as a subprocess per recording
 - **SQLite** — single-file database with FTS5 for full-text search
 - **FFmpeg** — audio preparation pipeline (high-pass filter, loudness normalization, silence trimming, downsampling)
 - **Ollama** — local LLM for summarization (default: `mistral`)

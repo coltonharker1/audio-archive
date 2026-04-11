@@ -44,19 +44,25 @@ func TranscribeRecording(ctx context.Context, cfg config.Config, db *store.DB, r
 		return nil, fmt.Errorf("audio file not found: %s", audioPath)
 	}
 
-	// Verify Python worker exists
-	if _, err := os.Stat(cfg.PythonPath); err != nil {
-		return nil, fmt.Errorf("python not found at %s — run: python3 -m venv .venv && .venv/bin/pip install -r worker/requirements.txt", cfg.PythonPath)
+	// Verify whisper.cpp binary exists.
+	if _, err := os.Stat(cfg.WhisperCppBin); err != nil {
+		return nil, fmt.Errorf("whisper.cpp binary not found at %s — run: brew install whisper-cpp", cfg.WhisperCppBin)
+	}
+	if _, err := os.Stat(cfg.WhisperCppModel); err != nil {
+		return nil, fmt.Errorf("whisper.cpp speech model not found at %s — download from https://huggingface.co/ggerganov/whisper.cpp", cfg.WhisperCppModel)
 	}
 
-	slog.Info("transcribing", "audio", audioPath, "model", cfg.ModelSize)
+	slog.Info("transcribing", "audio", audioPath, "backend", "whisper.cpp", "model", filepath.Base(cfg.WhisperCppModel))
 	start := time.Now()
 
-	// 60-minute cap per transcription job
+	// 60-minute cap per transcription job. On Metal this is wildly
+	// oversized — r005 (~69min sermon) ran in 1m41s during cutover
+	// benchmark — but preserves headroom for long tapes processed on
+	// older hardware.
 	txCtx, cancel := context.WithTimeout(ctx, 60*time.Minute)
 	defer cancel()
 
-	result, err := transcribe.Run(txCtx, cfg.PythonPath, cfg.WorkerPath, audioPath, cfg.ModelSize)
+	result, err := transcribe.RunWhisperCpp(txCtx, cfg.WhisperCppBin, cfg.WhisperCppModel, cfg.WhisperCppVADModel, audioPath)
 	if err != nil {
 		return nil, fmt.Errorf("transcription worker: %w", err)
 	}

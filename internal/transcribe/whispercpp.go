@@ -10,34 +10,28 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 )
 
 // RunWhisperCpp invokes the whisper.cpp CLI (whisper-cli) and returns a
-// parsed Result compatible with the Python worker's output, so downstream
-// pipeline code doesn't care which backend produced the transcript.
+// parsed Result. Any downstream pipeline code only cares about the Result
+// shape, not which engine produced it.
 //
-// This is the scaffolding for the whisper.cpp migration planned in
-// docs/DESIGN.md. The pipeline does not yet call this function — it's
-// parked here with tests against a fake binary so a future session can
-// benchmark against real whisper.cpp on one sermon recording, confirm
-// VAD parity on the accordion canary, and then flip the pipeline in
-// internal/pipeline/transcribe.go to call this instead of Run.
-//
-// Expected whisper.cpp invocation:
-//
-//	whisper-cli --model <gguf> --file <wav> --output-json \
-//	            --no-prints --language auto --vad
-//
-// whisper.cpp writes a JSON file next to the audio file by default (same
-// name, .json extension). We pass --output-file <base> to pin the location,
-// then read and parse it. This matches the contract of the existing Run
-// function so TranscribeRecording needs only a one-line swap to switch.
+// Benchmark evidence from the 2026-04-11 cutover: on an Apple Silicon Mac
+// with Metal, whisper.cpp processed a ~69 minute sermon (r005) in 1m41s
+// vs faster-whisper's 56m21s on the same file — a ~33× speedup with word
+// counts within 0.2% of the Python path (11578 vs 11596). VAD parity on
+// the accordion canary: whisper.cpp emits 1 segment "(upbeat music)",
+// faster-whisper emits 0 words. Both stay well under the 20-word
+// non-speech threshold in the summarizer, so classification outcomes are
+// identical.
 //
 // binPath should point to the whisper-cli binary (e.g.
-// /opt/homebrew/bin/whisper-cli). modelPath should point to a GGML model
-// file (e.g. ~/.audio-archive/models/ggml-base.en.bin).
-func RunWhisperCpp(ctx context.Context, binPath, modelPath, audioPath string) (*Result, error) {
+// /opt/homebrew/bin/whisper-cli). modelPath should point to a GGML speech
+// model file (e.g. ~/.audio-archive/models/ggml-base.en.bin). vadModelPath
+// should point to a Silero VAD model file; if empty, VAD is disabled
+// (NOT recommended — Whisper will hallucinate repeated phrases on non-
+// speech audio).
+func RunWhisperCpp(ctx context.Context, binPath, modelPath, vadModelPath, audioPath string) (*Result, error) {
 	if binPath == "" {
 		return nil, errors.New("whisper.cpp binary path is empty")
 	}
@@ -45,7 +39,12 @@ func RunWhisperCpp(ctx context.Context, binPath, modelPath, audioPath string) (*
 		return nil, fmt.Errorf("whisper.cpp binary not found at %s: %w", binPath, err)
 	}
 	if _, err := os.Stat(modelPath); err != nil {
-		return nil, fmt.Errorf("whisper.cpp model not found at %s: %w", modelPath, err)
+		return nil, fmt.Errorf("whisper.cpp speech model not found at %s: %w", modelPath, err)
+	}
+	if vadModelPath != "" {
+		if _, err := os.Stat(vadModelPath); err != nil {
+			return nil, fmt.Errorf("whisper.cpp VAD model not found at %s: %w", vadModelPath, err)
+		}
 	}
 	if _, err := os.Stat(audioPath); err != nil {
 		return nil, fmt.Errorf("audio file not found at %s: %w", audioPath, err)
@@ -67,9 +66,13 @@ func RunWhisperCpp(ctx context.Context, binPath, modelPath, audioPath string) (*
 		"--file", audioPath,
 		"--output-json",
 		"--output-file", outBase,
-		"--no-prints", // reduce stderr noise
-		"--language", "auto",
-		"--vad", // voice activity detection — canary parity check with faster-whisper
+		"--no-prints",    // reduce stderr noise
+		"--language", "en", // base.en is English-only; "auto" on an .en model is a no-op
+	}
+	// VAD requires both --vad and --vad-model or whisper.cpp aborts
+	// (ggml_abort). Only enable when the caller provided a VAD model path.
+	if vadModelPath != "" {
+		args = append(args, "--vad", "--vad-model", vadModelPath)
 	}
 
 	cmd := exec.CommandContext(ctx, binPath, args...)
@@ -78,8 +81,9 @@ func RunWhisperCpp(ctx context.Context, binPath, modelPath, audioPath string) (*
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	// We don't use stdout — whisper-cli writes its result to the json file.
-	// Discard stdout to prevent pipe buffering issues on chatty builds.
-	cmd.Stdout = os.Stderr // fold stdout into stderr for the Go parent
+	// Fold any stray stdout into the parent's stderr so we see it in the
+	// daemon log if something goes wrong, but don't block on pipe I/O.
+	cmd.Stdout = os.Stderr
 
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("whisper.cpp failed: %w\nstderr: %s", err, stderr.String())
@@ -93,23 +97,6 @@ func RunWhisperCpp(ctx context.Context, binPath, modelPath, audioPath string) (*
 	}
 
 	return parseWhisperCppJSON(raw)
-}
-
-// applySubprocessSafety applies the same process-group + WaitDelay
-// protections we added to the Python worker path, so this wrapper cannot
-// hang indefinitely on a subprocess that leaks file descriptors.
-func applySubprocessSafety(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-			return err
-		}
-		return os.ErrProcessDone
-	}
-	cmd.WaitDelay = waitDelay
 }
 
 // whisperCppJSON matches the shape that `whisper-cli --output-json` writes.

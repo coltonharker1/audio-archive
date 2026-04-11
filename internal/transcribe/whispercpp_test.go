@@ -96,8 +96,8 @@ func TestRunWhisperCpp_FakeBinary(t *testing.T) {
 
 	dir := t.TempDir()
 
-	// Create a fake audio file and model file so RunWhisperCpp's Stat
-	// checks pass.
+	// Create fake audio, speech model, and VAD model files so the Stat
+	// checks inside RunWhisperCpp pass.
 	audioPath := filepath.Join(dir, "sample.wav")
 	if err := os.WriteFile(audioPath, []byte("fake wav"), 0o644); err != nil {
 		t.Fatalf("write audio: %v", err)
@@ -106,26 +106,35 @@ func TestRunWhisperCpp_FakeBinary(t *testing.T) {
 	if err := os.WriteFile(modelPath, []byte("fake model"), 0o644); err != nil {
 		t.Fatalf("write model: %v", err)
 	}
+	vadPath := filepath.Join(dir, "ggml-silero.bin")
+	if err := os.WriteFile(vadPath, []byte("fake vad"), 0o644); err != nil {
+		t.Fatalf("write vad model: %v", err)
+	}
 
-	// Fake whisper-cli: parses --output-file arg, writes canned JSON to
-	// that path + ".json", exits 0.
+	// Fake whisper-cli: parses --output-file, asserts --vad/--vad-model
+	// pair consistency (either both or neither), writes canned JSON to
+	// --output-file + ".json", exits 0.
 	fakeBin := filepath.Join(dir, "fake-whisper-cli.sh")
 	script := fmt.Sprintf(`#!/bin/sh
-# Minimal flag parser: we only care about --output-file
+OUT=""
+VAD=0
+VAD_MODEL=""
 while [ $# -gt 0 ]; do
 	case "$1" in
-		--output-file)
-			OUT="$2"
-			shift 2
-			;;
-		*)
-			shift
-			;;
+		--output-file) OUT="$2"; shift 2 ;;
+		--vad) VAD=1; shift ;;
+		--vad-model) VAD_MODEL="$2"; shift 2 ;;
+		*) shift ;;
 	esac
 done
 if [ -z "$OUT" ]; then
 	echo "fake whisper-cli: --output-file not passed" >&2
 	exit 2
+fi
+if [ "$VAD" = "1" ] && [ -z "$VAD_MODEL" ]; then
+	# Mirror real whisper.cpp behaviour: aborts without a VAD model.
+	echo "fake whisper-cli: --vad without --vad-model" >&2
+	exit 3
 fi
 cat > "${OUT}.json" <<'JSON'
 %s
@@ -138,15 +147,27 @@ JSON
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	got, err := RunWhisperCpp(ctx, fakeBin, modelPath, audioPath)
+	// Happy path: VAD model provided.
+	got, err := RunWhisperCpp(ctx, fakeBin, modelPath, vadPath, audioPath)
 	if err != nil {
-		t.Fatalf("RunWhisperCpp: %v", err)
+		t.Fatalf("RunWhisperCpp with VAD: %v", err)
 	}
 	if len(got.Segments) != 2 {
 		t.Fatalf("expected 2 segments, got %d", len(got.Segments))
 	}
 	if got.Language != "en" {
 		t.Errorf("language = %q, want en", got.Language)
+	}
+
+	// VAD-disabled path: empty VAD model path is legal and must not
+	// append --vad flags to the child invocation (otherwise the fake
+	// aborts with exit 3).
+	got2, err := RunWhisperCpp(ctx, fakeBin, modelPath, "", audioPath)
+	if err != nil {
+		t.Fatalf("RunWhisperCpp without VAD: %v", err)
+	}
+	if len(got2.Segments) != 2 {
+		t.Fatalf("expected 2 segments (vad off), got %d", len(got2.Segments))
 	}
 }
 
@@ -157,8 +178,24 @@ func TestRunWhisperCpp_MissingBinary(t *testing.T) {
 	_ = os.WriteFile(audio, []byte("x"), 0o644)
 	_ = os.WriteFile(model, []byte("x"), 0o644)
 
-	_, err := RunWhisperCpp(context.Background(), filepath.Join(dir, "nope"), model, audio)
+	_, err := RunWhisperCpp(context.Background(), filepath.Join(dir, "nope"), model, "", audio)
 	if err == nil {
 		t.Fatal("expected missing-binary error, got nil")
+	}
+}
+
+func TestRunWhisperCpp_MissingVADModel(t *testing.T) {
+	dir := t.TempDir()
+	audio := filepath.Join(dir, "a.wav")
+	model := filepath.Join(dir, "m.bin")
+	_ = os.WriteFile(audio, []byte("x"), 0o644)
+	_ = os.WriteFile(model, []byte("x"), 0o644)
+	// Bin must exist so we get past the binary Stat check.
+	bin := filepath.Join(dir, "fake")
+	_ = os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755)
+
+	_, err := RunWhisperCpp(context.Background(), bin, model, filepath.Join(dir, "nope-vad"), audio)
+	if err == nil {
+		t.Fatal("expected error when VAD model path is set but missing")
 	}
 }
