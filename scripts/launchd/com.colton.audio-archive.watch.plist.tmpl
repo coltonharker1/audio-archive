@@ -21,13 +21,14 @@
     <key>KeepAlive</key>
     <true/>
 
-    <!-- Working directory set to project root so config.findProjectRoot()
-         locates the Python venv and worker.py correctly -->
+    <!-- Working directory set to project root so the daemon can find
+         any relative paths (logs, scripts) regardless of how launchd
+         spawned it. -->
     <key>WorkingDirectory</key>
     <string>{{PROJECT_ROOT}}</string>
 
     <!-- launchd doesn't inherit the user's shell PATH. Explicitly include
-         Homebrew locations so ffmpeg/ffprobe/python3 are found. -->
+         Homebrew locations so ffmpeg / ffprobe / whisper-cli are found. -->
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
@@ -41,7 +42,10 @@
     <key>StandardErrorPath</key>
     <string>{{DATA_DIR}}/logs/watch.err</string>
 
-    <!-- Background = lower priority, doesn't interfere with interactive apps -->
+    <!-- Background QoS is fine here: the watcher blocks on fsnotify
+         events and does trivial compute on file-change callbacks. It
+         never needs P-cores. (The worker daemon does NOT set
+         ProcessType — see its plist for the cautionary tale.) -->
     <key>ProcessType</key>
     <string>Background</string>
 </dict>
