@@ -542,15 +542,155 @@ Ingesting it at that moment would archive an empty file.
 - **The `people` field sometimes gets "Speaker" as a placeholder**
   instead of the actual name, when the model overcorrects.
 
+## Optimization roadmap
+
+Performance-focused future work, captured here so the plan doesn't get
+lost across sessions. Wave 1 has been shipped (FFmpeg filter reordering,
+prep timeout, extraction prompt shrinkage). The items below are the
+bigger wins still on the table.
+
+### Switch Whisper to `whisper.cpp` with Metal (biggest single win)
+
+**Status:** not yet implemented. **Estimated effort:** 60-90 minutes.
+**Expected speedup:** 3-5x on transcription, which is the dominant
+bottleneck for long speech-heavy recordings. Changes a 70-minute sermon
+transcribe from ~12-15 minutes to ~3-4 minutes.
+
+**The problem.** The current transcription worker uses `faster-whisper`,
+which is a Python binding to `CTranslate2`. CTranslate2 supports CPU and
+CUDA but **not Metal**. On Apple Silicon, faster-whisper runs entirely
+on the CPU with int8 quantization, achieving ~2-5x realtime. That's
+slow, AND it leaves the 14-16 core Apple GPU completely idle during
+every transcription.
+
+**The fix.** Swap the Python worker for `whisper.cpp`, a native C++
+reimplementation of Whisper that uses Metal for matrix operations on
+Apple Silicon. Same Whisper model weights, same decode algorithm —
+just a different runtime that actually uses the GPU.
+
+**Why `whisper.cpp` specifically (over `mlx-whisper`):**
+
+- `whisper.cpp` is a standalone CLI, not a Python library. Swapping to
+  it eliminates Python from the transcription path entirely, aligning
+  with the "Go primary, Python minimized" design principle. The Python
+  venv (`worker/transcribe.py`, `worker/requirements.txt`, `.venv/`)
+  can be deleted.
+- It's battle-tested — it powers a huge number of production tools.
+- `brew install whisper-cpp` is a single command.
+- Faster startup per invocation (no Python interpreter startup, no
+  library import time). Matters for short files.
+- `mlx-whisper` is slightly newer and Python-based; the speed is
+  comparable but the "no more Python" benefit of `whisper.cpp` is a
+  meaningful simplification for this project.
+
+**Implementation plan:**
+
+1. **Install and benchmark.** `brew install whisper-cpp`. Download a
+   base model from HuggingFace (e.g.
+   `ggml-base.en.bin` from `ggerganov/whisper.cpp`). Run it against one
+   of the real tape recordings and compare quality + speed against the
+   current pipeline on the same file. Confirm the expected speedup.
+
+2. **Model management.** Decide where model files live. Options:
+   - Bundled: ship a small model with the repo (too big for git).
+   - User-provided path: `WhisperCppModel` in config, user downloads once.
+   - Auto-download on first use: `archive` detects missing model and
+     fetches from HuggingFace.
+   Recommendation: user-provided path stored under
+   `~/.audio-archive/models/`, with an `archive install-models` CLI
+   convenience command that downloads defaults.
+
+3. **New Go wrapper.** Replace `internal/transcribe/worker.go`. Instead
+   of `exec.CommandContext(python, workerPath, ...)`, call
+   `exec.CommandContext(whisperBin, --model, modelPath, --file,
+   audioPath, --output-json, --beam-size, 5, ...)`. Parse
+   whisper.cpp's JSON output into the existing `transcribe.Result`
+   struct (downstream code doesn't change).
+
+4. **VAD support.** `whisper.cpp` has VAD via `--vad` and
+   `--vad-model` flags. Must verify it prevents the same Whisper
+   hallucination-on-non-speech behavior we fixed in Wave 1 (the
+   accordion recording test case). If VAD isn't as effective, may
+   need to pre-process with FFmpeg silence detection, or keep the
+   post-transcribe repetition detector as a safety net.
+
+5. **Config updates.** Replace `PythonPath` and `WorkerPath` fields in
+   `config.Config` with `WhisperCppBin` (default
+   `/opt/homebrew/bin/whisper-cli`) and `WhisperCppModel` (default
+   `~/.audio-archive/models/ggml-base.en.bin`). Update
+   `config.Default()`.
+
+6. **Cleanup.** Delete `worker/transcribe.py`,
+   `worker/requirements.txt`, the `worker/` directory entirely.
+   Remove Python venv references from README, Makefile, and
+   `internal/pipeline/transcribe.go`. Update DESIGN.md to reflect
+   the "no Python at all" architecture.
+
+7. **Test end-to-end.** Re-process one of the archived test recordings
+   through the full pipeline with the new worker. Verify:
+   - Transcript quality is equal or better
+   - Timing is dramatically faster
+   - The VAD still prevents hallucinations on the 35-minute accordion
+     file (our canary for non-speech audio)
+
+**Risks and trade-offs:**
+
+- **Model file format.** faster-whisper downloaded models automatically
+  in its own format; whisper.cpp uses GGML `.bin` files which are a
+  separate download. One-time friction for the user.
+- **Slightly different defaults.** whisper.cpp's CLI has different
+  default temperature fallback, beam search, etc. Output may differ
+  subtly from faster-whisper on ambiguous speech. Neither is "better"
+  — just different.
+- **VAD parity.** If whisper.cpp's VAD isn't as robust as faster-whisper's
+  Silero integration, we may need additional safeguards against
+  hallucination loops. Plan for this explicitly during testing.
+- **Model download in CI / fresh install.** An `archive install-models`
+  convenience command is worth the 30 minutes to build since manual
+  curl-from-HuggingFace is a bad onboarding experience.
+
+**Why we haven't done it yet:** Wave 1 fixes (filter reorder, prompt
+shrink) gave the biggest immediate wins with lowest risk. The Whisper
+swap is a bigger refactor that deserves a dedicated session with fresh
+context, good baseline numbers from the Wave 1 pipeline to compare
+against, and time to properly validate the VAD behavior on non-speech
+files.
+
+### Other performance wins
+
+These are smaller but still worthwhile, roughly in order of value:
+
+- **Worker concurrency = 2 or 3.** With CPU Whisper, two recordings in
+  prep + transcribe would compete for CPU. But the three stages use
+  different resources (prep = CPU, transcribe = CPU *unless* GPU via
+  whisper.cpp, summarize = GPU via Ollama). Once Whisper moves off
+  CPU, bumping concurrency to 2-3 lets different recordings progress
+  through different stages in parallel for a 30-50% batch speedup.
+  One-line change in the launchd plist. Best done *after* the
+  whisper.cpp swap.
+
+- **Deterministic proper-noun preprocessing.** Regex capitalized words
+  out of the transcript and inject as "these must appear in
+  people/places/organizations" to the stage 3 prompt. Eliminates
+  entity extraction variance without model changes. ~50 lines of Go.
+
+- **Two-pass stage 3 extraction.** Split into "classify + universal"
+  (small focused prompt) and "type-specific" (small prompt showing
+  only the field guide for the classified type). Doubles the LLM call
+  count but each call is fast and focused, and quality usually
+  improves because the model isn't juggling everything at once.
+
+- **Opportunistic prep skip.** If a source file is already 16 kHz mono
+  and within a reasonable loudness range, skip the loudnorm pass
+  entirely. Would make prep near-instant for most modern recordings
+  while preserving the heavy work for tape digitizations.
+
+- **Larger-context LLM.** Try `mistral-nemo` (128k context) as a
+  drop-in replacement for mistral. More headroom for future prompt
+  additions without hitting context window issues. Same speed per
+  token. ~2x the RAM usage (~7 GB loaded vs ~4.5 GB).
+
 ## Future work
-
-Ordered roughly by value:
-
-1. **Deterministic proper-noun extraction.** Regex capitalized words
-   out of the transcript and inject them into the stage 3 prompt as
-   "these proper nouns must appear in people/places/organizations."
-   Eliminates the entity extraction variance without prompt tuning.
-   ~50 lines of Go.
 
 2. **Larger LLM comparison.** Test with `llama3.1:8b` and `gemma2:9b`
    via the existing Ollama client. Both should be better at
