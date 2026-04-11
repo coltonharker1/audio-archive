@@ -7,14 +7,111 @@
 
 ## Table of contents
 
-1. [What and why](#what-and-why)
-2. [Goals and non-goals](#goals-and-non-goals)
-3. [Architecture overview](#architecture-overview)
-4. [Pipeline stages](#pipeline-stages)
-5. [Design decisions](#design-decisions)
-6. [Hard problems and how we handle them](#hard-problems-and-how-we-handle-them)
-7. [What's solid vs what's flaky](#whats-solid-vs-whats-flaky)
-8. [Future work](#future-work)
+1. [Current state / session handoff](#current-state--session-handoff)
+2. [What and why](#what-and-why)
+3. [Goals and non-goals](#goals-and-non-goals)
+4. [Architecture overview](#architecture-overview)
+5. [Pipeline stages](#pipeline-stages)
+6. [Design decisions](#design-decisions)
+7. [Hard problems and how we handle them](#hard-problems-and-how-we-handle-them)
+8. [What's solid vs what's flaky](#whats-solid-vs-whats-flaky)
+9. [Optimization roadmap](#optimization-roadmap)
+10. [Future work](#future-work)
+
+---
+
+## Current state / session handoff
+
+> This section is the **first thing to read when picking this project up
+> in a fresh session.** It captures where things stand as of the most recent
+> work so you don't have to reconstruct context from git log alone.
+
+**Last updated:** 2026-04-10 (end of session).
+
+### What is working end-to-end
+
+The full "drop a file, get a searchable archive entry" flow is live:
+
+1. Drop any supported audio file in `~/audio-inbox/` (wav, mp3, m4a, flac, aiff, aac, ogg, opus).
+2. The **`watch` launchd daemon** detects it via fsnotify, waits for size stability, and ingests it via `pipeline.IngestFile`.
+3. Prep / transcribe / summarize jobs are enqueued to a SQLite-backed job queue.
+4. The **`worker` launchd daemon** processes jobs with retries, backoff, and crash recovery.
+5. `archive list`, `archive show <id>`, `archive search <phrase>` let you browse the results.
+
+Both daemons run under `launchd`, auto-start at login, and restart on crash. See `Makefile` targets `install-daemons`, `daemons-status`, `logs`, `uninstall-daemons`.
+
+### What shipped in the most recent session
+
+Thirteen commits on `main`, all pushed to `origin/main`. Highlights:
+
+1. **Initial CLI + pipeline** — ingest, prep, transcribe, summarize, run, list, show, search.
+2. **Background job manager** — goroutine worker pool, buffered channel, dispatcher polling SQLite, atomic claim via `UPDATE ... RETURNING`, crash recovery via `ResetStuckJobs`, retry backoff, context-based graceful shutdown.
+3. **50+ tests, race-clean** — `internal/store/jobs_test.go`, `internal/jobs/manager_test.go`, `internal/summarize/engine_test.go`, `internal/watcher/watcher_test.go`. Includes a concurrent-worker atomicity test that hammers the manager with 4 workers × 40 jobs.
+4. **Batch directory ingest** — `archive ingest-dir <dir> --recursive --run` with stability delay and hidden-file filtering.
+5. **Generalized metadata structure** — `SermonSummary` → `RecordingSummary` covering 11 recording types (sermon, voicemail, phone_call, interview, meeting, musical_performance, audio_diary, lecture, broadcast, field_recording, other) with universal fields + a `type_specific map[string]any` for per-type extensions.
+6. **Whisper hallucination fix** — VAD filter in the Python worker, speech-density hint to the classifier, non-speech branch that skips chunk/merge for empty transcripts, file-context hint. Fixed the accordion recording from "audio_diary about searching for music" to "field_recording: Accordion School and Performances".
+7. **Folder watch daemon + launchd integration** — `archive watch` command using `fsnotify`, launchd plists for both `watch` and `worker`, `Makefile` targets for install/uninstall/status/logs.
+8. **Wave 1 optimizations (today)**:
+   - FFmpeg filter reorder: downsample to 16 kHz mono **first**, then highpass + loudnorm. Drops data by ~6x before the filter chain runs. Also dropped `silenceremove` (VAD handles it) and added `-threads 0`.
+   - Prep timeout: 10 min → 60 min (long tapes were getting killed mid-ffmpeg).
+   - Stage 3 extraction prompt shrunk from ~2,500 words to **613 words** via `TestExtractPromptSize` regression guard. Fixed the broken 14-minute summarize (prompt was overflowing Mistral's 8K context).
+9. **Comprehensive docs** — this file (DESIGN.md), `docs/remanence-integration.md`, README with the inbox workflow, `Makefile` help, and an Optimization roadmap section that captures the whisper.cpp migration plan and proposed Quality and reliability wins.
+
+### What's currently running
+
+At the end of the last session, **both daemons were loaded under launchd and processing a batch of 9 real tape recordings** dropped in `~/audio-inbox/`. The batch started at roughly 23:17 on 2026-04-10. First recording (R005 sermon, ~1.1 GB / ~1 hour) took 5m23s for prep and then entered transcribe. Total batch is expected to take ~6 hours due to CPU Whisper being the dominant bottleneck. Running overnight.
+
+**First thing to do next session:**
+
+```bash
+./archive status   # see how the batch finished
+./archive list     # see the 9 processed recordings
+make logs          # tail the daemon logs for anything unusual
+```
+
+Then spot-check quality by running `./archive show <id>` on a few entries and looking at the summaries and transcripts. The interesting question: did the shrunken stage 3 extraction prompt produce good summaries under the new pipeline, or are there regressions?
+
+### Immediate next priorities
+
+In rough order of value:
+
+1. **Assess batch quality** (10 min). Look at the 9 summaries. Which classifications are right? Which type_specific fields populated? Any entity extraction flakiness? Any broken summaries? This data tells you which of the below is most urgent.
+
+2. **Whisper migration to `whisper.cpp`** (60-90 min). Documented in detail under [Optimization roadmap → Switch Whisper to whisper.cpp with Metal](#switch-whisper-to-whispercpp-with-metal-biggest-single-win). This is the single biggest remaining speedup (~3-5x on transcribe, eliminating Python from the project entirely). If the overnight batch took the expected ~6 hours, doing this drops it to ~2 hours and also removes the `worker/` and `.venv/` directories.
+
+3. **Deterministic proper-noun and Bible reference extraction** (varies). Documented under [Quality and reliability wins](#quality-and-reliability-wins). These are proposals, not implemented. They address the entity extraction variance and "1-to-10 bible references per run" flakiness that we identified. Do these if quality assessment (step 1) shows they're the bigger pain.
+
+4. **Confidence scoring + `needs_review` flag**. Also in Quality and reliability wins. Makes "honest degradation" concrete by flagging sketchy outputs and gating remanence auto-upload. Do this before the remanence integration.
+
+5. **Remanence integration**. The north-star feature. Sketched in [remanence-integration.md](remanence-integration.md). Should use the `needs_review` flag from step 4.
+
+Everything beyond this is in [Future work](#future-work).
+
+### Key tripwires to remember
+
+- **The `NeedsReview` struct field does NOT exist yet** — despite being mentioned in the Quality and reliability wins section as a proposal. If you grep for it in the code, you won't find it. The code block under that item is explicitly marked `// PROPOSED — not yet present on the struct`.
+- **`whisper.cpp` is not installed yet either** — the migration plan is in the design doc but no code change has been made. The current worker is still Python-based `faster-whisper`.
+- **Run-to-run LLM variance is real** — Mistral 7B at temperature 0.2 is not deterministic. The same file re-summarized twice will produce different entity lists, different bible reference counts, different titles. This is a known ceiling, not a bug. See [What's solid vs what's flaky](#whats-solid-vs-whats-flaky).
+- **Context overflows are silent** — the reason stage 3 took 14 minutes earlier was that the prompt + content exceeded Mistral's 8K context window, causing sliding-window reprocessing. The `TestExtractPromptSize` test in `internal/summarize/engine_test.go` is a regression guard against this specific class of bug. If you grow the prompt template, that test will fail first.
+- **`SetMaxOpenConns(1)` on the SQLite connection is load-bearing** — it eliminates SQLITE_BUSY errors from concurrent writes. Don't remove it even if the WAL mode comment makes it look unnecessary.
+
+### Quick reference to where things live
+
+| What | Where |
+|---|---|
+| CLI entry point | `cmd/archive/main.go` |
+| Pipeline logic (pure functions) | `internal/pipeline/` |
+| Job manager + handlers | `internal/jobs/` |
+| SQLite store + migrations | `internal/store/` |
+| Summarization engine + prompts | `internal/summarize/` |
+| Folder watcher | `internal/watcher/` |
+| Python transcription worker | `worker/transcribe.py` |
+| launchd plist templates | `scripts/launchd/` |
+| Daemon install/uninstall | `Makefile` |
+| Config (paths, model names) | `internal/config/config.go` |
+| Archive data root | `~/.audio-archive/` |
+| Inbox directory | `~/audio-inbox/` |
+| Daemon logs | `~/.audio-archive/logs/{watch,worker}.{log,err}` |
 
 ---
 
