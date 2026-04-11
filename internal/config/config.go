@@ -12,9 +12,16 @@ type Config struct {
 	ModelSize  string // whisper model size (tiny, base, small, medium, large)
 	Ffmpeg     string // path to ffmpeg binary
 	Ffprobe    string // path to ffprobe binary
-	PythonPath string // path to Python binary (venv)
-	WorkerPath string // path to Python transcription worker
-	OllamaModel string // Ollama model for summarization
+	PythonPath string // path to Python binary (venv) — legacy, used by faster-whisper worker
+	WorkerPath string // path to Python transcription worker — legacy
+	// whisper.cpp migration (see docs/DESIGN.md Optimization roadmap).
+	// When WhisperCppBin is non-empty and exists on disk, the pipeline will
+	// prefer whisper.cpp over the Python worker. Until then these fields are
+	// populated-but-unused so a future session can flip the switch with zero
+	// config ceremony.
+	WhisperCppBin   string // path to whisper.cpp CLI binary (e.g. /opt/homebrew/bin/whisper-cli)
+	WhisperCppModel string // path to GGML model file (e.g. ~/.audio-archive/models/ggml-base.en.bin)
+	OllamaModel     string // Ollama model for summarization
 }
 
 // Default returns a Config with sensible defaults.
@@ -26,14 +33,16 @@ func Default() Config {
 	projDir := findProjectRoot()
 
 	return Config{
-		DataDir:    dataDir,
-		DBPath:     filepath.Join(dataDir, "archive.db"),
-		ModelSize:  "base",
-		Ffmpeg:     "ffmpeg",
-		Ffprobe:    "ffprobe",
-		PythonPath:  filepath.Join(projDir, ".venv", "bin", "python"),
-		WorkerPath:  filepath.Join(projDir, "worker", "transcribe.py"),
-		OllamaModel: "mistral",
+		DataDir:         dataDir,
+		DBPath:          filepath.Join(dataDir, "archive.db"),
+		ModelSize:       "base",
+		Ffmpeg:          "ffmpeg",
+		Ffprobe:         "ffprobe",
+		PythonPath:      filepath.Join(projDir, ".venv", "bin", "python"),
+		WorkerPath:      filepath.Join(projDir, "worker", "transcribe.py"),
+		WhisperCppBin:   "/opt/homebrew/bin/whisper-cli",
+		WhisperCppModel: filepath.Join(dataDir, "models", "ggml-base.en.bin"),
+		OllamaModel:     "mistral",
 	}
 }
 
@@ -74,6 +83,13 @@ func (c Config) MetadataDir() string {
 	return filepath.Join(c.DataDir, "metadata")
 }
 
+// ModelsDir returns the path to the directory where whisper.cpp GGML model
+// files live. Users download ggml-*.bin files here once; the path is static
+// so the install workflow can be a single curl.
+func (c Config) ModelsDir() string {
+	return filepath.Join(c.DataDir, "models")
+}
+
 // EnsureDirs creates all required data directories.
 func (c Config) EnsureDirs() error {
 	dirs := []string{
@@ -82,6 +98,7 @@ func (c Config) EnsureDirs() error {
 		c.ProcessedDir(),
 		c.TranscriptsDir(),
 		c.MetadataDir(),
+		c.ModelsDir(),
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0755); err != nil {

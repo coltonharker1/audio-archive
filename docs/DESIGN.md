@@ -26,7 +26,63 @@
 > in a fresh session.** It captures where things stand as of the most recent
 > work so you don't have to reconstruct context from git log alone.
 
-**Last updated:** 2026-04-10 (end of session).
+**Last updated:** 2026-04-11 (mid-session, overnight batch still running).
+
+### Session of 2026-04-11 (what happened this morning)
+
+Came back to a **stuck queue**: `./archive status` showed 13 pending, 4 running, 10 complete on the overnight batch that was supposed to process 9 recordings. Daemons were alive at 0% CPU; last `worker.err` activity was at 07:44:51 starting a transcribe on `r002-t1-7inch.prep.wav`. No Python subprocess alive beneath the Go worker. Classic pipe-deadlock.
+
+**Root cause.** `faster-whisper` uses Python multiprocessing. When its parent is killed (OOM on long transcribes — we saw two of these in the batch log, including a `resource_tracker: leaked semaphore` warning), the multiprocessing pool workers can survive and keep the stdout pipe open. Go's `cmd.Wait` then blocks forever on a pipe-copy goroutine that never sees EOF. The 60-minute deadline in `pipeline/transcribe.go` *did* fire — but the cancel path couldn't actually return.
+
+**Fix shipped** (commit "Fix transcribe worker hang when faster-whisper leaks grandchildren"). In `internal/transcribe/worker.go`:
+
+- `cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}` — subprocess gets its own process group so Cancel can signal the whole tree.
+- Custom `cmd.Cancel` that sends `SIGKILL` to `-cmd.Process.Pid` (process group), not just the direct child.
+- `cmd.WaitDelay = waitDelay` (30s in prod) — bounds the time Wait will block on I/O pipes after the process is dead. This is the belt-and-suspenders for grandchildren that escape the group kill (e.g. anything `setsid`'d).
+- Added `internal/transcribe/worker_test.go` with a regression test (`TestRun_GrandchildPipeHolderDoesNotHang`) that uses a fake python script spawning a `setsid`-detached grandchild holding stdout. Before the fix the test hangs until the grandchild self-terminates; after, it returns bounded in well under 2s.
+
+**whisper.cpp migration scaffolding** (same session, not yet integrated into pipeline):
+
+- `internal/transcribe/whispercpp.go` — new `RunWhisperCpp(ctx, binPath, modelPath, audioPath)` function that invokes `whisper-cli --output-json --output-file <tmp> --vad` and parses the result into the existing `Result` type. Applies the same process-group + WaitDelay safety as the Python path.
+- `parseWhisperCppJSON` is factored out so it's unit-testable without the binary installed.
+- `internal/transcribe/whispercpp_test.go` covers the parser (happy path, empty transcription / VAD canary, malformed) and exercises `RunWhisperCpp` end-to-end against a **fake whisper-cli shell script** — tests pass even if `brew install whisper-cpp` hasn't been run.
+- `internal/config/config.go` gained `WhisperCppBin` and `WhisperCppModel` fields (defaulting to `/opt/homebrew/bin/whisper-cli` and `~/.audio-archive/models/ggml-base.en.bin`), and a `ModelsDir()` helper. `EnsureDirs()` now creates the models directory.
+- **`internal/pipeline/transcribe.go` still calls the Python `transcribe.Run`.** The swap is a one-line change once whisper.cpp is installed and benchmarked on a real recording.
+
+**Next session, to actually cut over to whisper.cpp:**
+
+```bash
+# 1. Install whisper.cpp and download a base English model.
+brew install whisper-cpp
+mkdir -p ~/.audio-archive/models
+curl -L -o ~/.audio-archive/models/ggml-base.en.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+
+# 2. Benchmark against one sermon (r005 is a good canary) and one
+#    non-speech file (r004-accordian is the canonical VAD parity test).
+#    Compare word count, timing, and classification outcomes to the
+#    overnight batch results. Especially verify that the accordion file
+#    still produces an empty transcript — VAD parity is the risk.
+
+# 3. In internal/pipeline/transcribe.go, swap
+#    transcribe.Run(txCtx, cfg.PythonPath, cfg.WorkerPath, audioPath, cfg.ModelSize)
+#    to
+#    transcribe.RunWhisperCpp(txCtx, cfg.WhisperCppBin, cfg.WhisperCppModel, audioPath)
+#    (model size is baked into WhisperCppModel for whisper.cpp).
+
+# 4. make reinstall-daemons and process one recording end-to-end.
+
+# 5. If VAD parity holds and speed is ~3-5x faster, delete worker/ and
+#    worker/requirements.txt, remove PythonPath/WorkerPath from config,
+#    drop the .venv references from README and Makefile, and update this
+#    section.
+```
+
+**Other gaps surfaced today (not yet fixed):**
+
+1. **Dispatcher has no predecessor-dependency check.** When `transcribe` fails permanently, the downstream `summarize` job is still claimed and burns its retry budget with "no transcript — transcribe first". Evidence: job 18 (summarize for rec 6) failed permanently after the rec-6 transcribe was killed during the hang. Fix would be a JOIN in the claim query: don't hand out a summarize until its recording has a transcript row, etc. Small SQL change in `internal/store/jobs.go`.
+
+2. **Dispatcher marks jobs `running` at claim time, not execution time.** With a 1-worker pool and a buffered channel, N jobs can be in the `running` DB state while only 1 is actually being worked on. Cosmetic now, but will confuse future hang diagnosis once concurrency bumps to 2-3. Two options: (a) add a `claimed` intermediate state separate from `running`, or (b) move the DB transition to the worker goroutine instead of the dispatcher. Low priority until concurrency goes up.
 
 ### What is working end-to-end
 
@@ -59,38 +115,41 @@ Thirteen commits on `main`, all pushed to `origin/main`. Highlights:
 
 ### What's currently running
 
-At the end of the last session, **both daemons were loaded under launchd and processing a batch of 9 real tape recordings** dropped in `~/audio-inbox/`. The batch started at roughly 23:17 on 2026-04-10. First recording (R005 sermon, ~1.1 GB / ~1 hour) took 5m23s for prep and then entered transcribe. Total batch is expected to take ~6 hours due to CPU Whisper being the dominant bottleneck. Running overnight.
+As of mid-morning 2026-04-11, the daemons are up on the **fixed** worker binary and grinding through the batch again. Post-`ResetStuckJobs` counts after the kick: 19 complete, 1 failed (rec-6 summarize, the fallout described above), 4 running, 30 pending. The pending count is higher than the original 9 because the watch daemon has picked up additional files from the inbox in the meantime. Still CPU-Whisper-bound on transcribe, so completion is still measured in hours — but every transcribe that finishes from this point on is running with the hang fix.
 
 **First thing to do next session:**
 
 ```bash
 ./archive status   # see how the batch finished
-./archive list     # see the 9 processed recordings
+./archive list     # see the processed recordings
 make logs          # tail the daemon logs for anything unusual
 ```
 
-Then spot-check quality by running `./archive show <id>` on a few entries and looking at the summaries and transcripts. The interesting question: did the shrunken stage 3 extraction prompt produce good summaries under the new pipeline, or are there regressions?
+Then spot-check quality by running `./archive show <id>` on a few entries. The interesting question: did the shrunken stage 3 extraction prompt produce good summaries under the new pipeline, or are there regressions? And: is there any sign of another pipe-hang, or did WaitDelay cover every case?
 
 ### Immediate next priorities
 
 In rough order of value:
 
-1. **Assess batch quality** (10 min). Look at the 9 summaries. Which classifications are right? Which type_specific fields populated? Any entity extraction flakiness? Any broken summaries? This data tells you which of the below is most urgent.
+1. **Assess batch quality** (10 min). Look at the latest completed summaries. Which classifications are right? Which type_specific fields populated? Any entity extraction flakiness? Any broken summaries? This data tells you which of the below is most urgent.
 
-2. **Whisper migration to `whisper.cpp`** (60-90 min). Documented in detail under [Optimization roadmap → Switch Whisper to whisper.cpp with Metal](#switch-whisper-to-whispercpp-with-metal-biggest-single-win). This is the single biggest remaining speedup (~3-5x on transcribe, eliminating Python from the project entirely). If the overnight batch took the expected ~6 hours, doing this drops it to ~2 hours and also removes the `worker/` and `.venv/` directories.
+2. **Finish the whisper.cpp cutover** (30-60 min now that the wrapper is scaffolded and tested). See the **Next session, to actually cut over** block above for the step-by-step. This is still the single biggest remaining speedup (~3-5x on transcribe), and today's hang incident is a strong argument for escalating it: whisper.cpp has no Python interpreter, no multiprocessing pool, and no grandchildren to leak, so the entire class of bug goes away. WaitDelay is a band-aid; whisper.cpp is the cure.
 
-3. **Deterministic proper-noun and Bible reference extraction** (varies). Documented under [Quality and reliability wins](#quality-and-reliability-wins). These are proposals, not implemented. They address the entity extraction variance and "1-to-10 bible references per run" flakiness that we identified. Do these if quality assessment (step 1) shows they're the bigger pain.
+3. **Dispatcher predecessor-dependency check** (~20 min). The rec-6 cascade today shows summarize being claimed without a transcript. Fix the claim SQL in `internal/store/jobs.go` so dependents aren't eligible until their predecessors are complete.
 
-4. **Confidence scoring + `needs_review` flag**. Also in Quality and reliability wins. Makes "honest degradation" concrete by flagging sketchy outputs and gating remanence auto-upload. Do this before the remanence integration.
+4. **Deterministic Bible reference extraction** (~60 min). Documented under [Quality and reliability wins](#quality-and-reliability-wins). Pure regex + canonical book list. Fixes the 1-to-10 references per run flakiness. Good to do *before* whisper.cpp if the batch-quality assessment shows it's the biggest pain; otherwise do after.
 
-5. **Remanence integration**. The north-star feature. Sketched in [remanence-integration.md](remanence-integration.md). Should use the `needs_review` flag from step 4.
+5. **Confidence scoring + `needs_review` flag**. Makes "honest degradation" concrete by flagging sketchy outputs and gating remanence auto-upload. Do this before the remanence integration.
+
+6. **Remanence integration**. The north-star feature. Sketched in [remanence-integration.md](remanence-integration.md). Should use the `needs_review` flag from step 5.
 
 Everything beyond this is in [Future work](#future-work).
 
 ### Key tripwires to remember
 
 - **The `NeedsReview` struct field does NOT exist yet** — despite being mentioned in the Quality and reliability wins section as a proposal. If you grep for it in the code, you won't find it. The code block under that item is explicitly marked `// PROPOSED — not yet present on the struct`.
-- **`whisper.cpp` is not installed yet either** — the migration plan is in the design doc but no code change has been made. The current worker is still Python-based `faster-whisper`.
+- **`whisper.cpp` is not installed yet**, but the Go-side wrapper (`RunWhisperCpp` in `internal/transcribe/whispercpp.go`) IS now written and tested against a fake binary. `internal/pipeline/transcribe.go` still calls `transcribe.Run` (the Python path). Cutover is a one-line swap after `brew install whisper-cpp` and a model download.
+- **`transcribe.Run` subprocess safety is load-bearing.** The `Setpgid`/`Cancel`/`WaitDelay` dance in `internal/transcribe/worker.go` is what prevents the entire job queue from deadlocking when faster-whisper's multiprocessing pool leaks grandchildren (we hit this on the 2026-04-10 overnight batch). `TestRun_GrandchildPipeHolderDoesNotHang` is the regression guard. If you're refactoring that file, preserve all three pieces.
 - **Run-to-run LLM variance is real** — Mistral 7B at temperature 0.2 is not deterministic. The same file re-summarized twice will produce different entity lists, different bible reference counts, different titles. This is a known ceiling, not a bug. See [What's solid vs what's flaky](#whats-solid-vs-whats-flaky).
 - **Context overflows are silent** — the reason stage 3 took 14 minutes earlier was that the prompt + content exceeded Mistral's 8K context window, causing sliding-window reprocessing. The `TestExtractPromptSize` test in `internal/summarize/engine_test.go` is a regression guard against this specific class of bug. If you grow the prompt template, that test will fail first.
 - **`SetMaxOpenConns(1)` on the SQLite connection is load-bearing** — it eliminates SQLITE_BUSY errors from concurrent writes. Don't remove it even if the WAL mode comment makes it look unnecessary.
@@ -105,7 +164,10 @@ Everything beyond this is in [Future work](#future-work).
 | SQLite store + migrations | `internal/store/` |
 | Summarization engine + prompts | `internal/summarize/` |
 | Folder watcher | `internal/watcher/` |
-| Python transcription worker | `worker/transcribe.py` |
+| Python transcription worker (legacy, to be removed) | `worker/transcribe.py` |
+| whisper.cpp wrapper (scaffolded, not yet wired into pipeline) | `internal/transcribe/whispercpp.go` |
+| Subprocess safety (process group + WaitDelay) | `internal/transcribe/worker.go` |
+| whisper.cpp model files (created on first run) | `~/.audio-archive/models/` |
 | launchd plist templates | `scripts/launchd/` |
 | Daemon install/uninstall | `Makefile` |
 | Config (paths, model names) | `internal/config/config.go` |
