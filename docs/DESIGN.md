@@ -692,73 +692,109 @@ These are smaller but still worthwhile, roughly in order of value:
 
 ### Quality and reliability wins
 
+> **Status of this entire subsection: none of these items are implemented yet.**
+> All four are proposals. No code exists for `NeedsReview`, no regex
+> extractors exist, no snapshot test harness exists. This section captures
+> the plan so a future session can pick it up.
+
 Speed isn't the only ceiling. Entity extraction, title generation, and
 reference counts are currently flaky because they rely on Mistral 7B
-"noticing" facts in the transcript. The right move is to **shrink the
-surface area where LLM reliability matters** — do deterministic
-extraction for the fields users will treat as factual, and keep the
-LLM for narrative prose and broad classification where variance is
-acceptable.
+"noticing" facts in the transcript. The proposed direction is to
+**shrink the surface area where LLM reliability matters** — do
+deterministic extraction for the fields users will treat as factual,
+and keep the LLM for narrative prose and broad classification where
+variance is acceptable.
 
-- **Deterministic Bible reference extraction.** A regex + canonical
-  book-name list (including common abbreviations like "1 Cor." and
-  "Rev.") can find every `Book chapter:verse` pattern in a transcript
-  with near-zero false positives. Run this extractor in Go, store the
-  results directly on the summary, and let the LLM only identify the
-  *primary* scripture focus (which is a judgment call) rather than
-  trying to enumerate all references (which is a counting problem it
-  fails at). This is a smaller-surface-area, higher-reliability version
-  of the deterministic proper-noun extraction idea, and arguably should
-  ship first since the grammar is more constrained. Directly fixes the
-  "1-to-10 references on the same input" flakiness noted in the
-  known-flaky section.
+#### Deterministic Bible reference extraction
 
-- **Template-based title generation.** Currently the LLM is asked to
-  "generate a title" freeform, which is why we see hallucinated date
-  ranges like "Voicemails with Martin (April 10 - April 16)". Replace
-  with type-aware templates that compose from already-extracted fields:
-  - voicemail → `"Voicemail from {caller}"` or `"Voicemail for {recipient}"`
-  - sermon → `"{speaker} — {scripture_focus}"` or `"{series} — {theme}"`
-  - musical_performance → `"{source_title}"` or `"{ensemble_type} — {piece}"`
-  - field_recording → `"{source_title}"` or inferred setting
-  - fallback → source filename stem
-  Eliminates an entire class of hallucination without needing better
-  models or better prompts.
+**Status:** not yet implemented. **Estimated effort:** ~60 minutes.
 
-- **Confidence scoring + `needs_review` flag.** Add to
-  `RecordingSummary`:
-  ```go
-  NeedsReview   bool     `json:"needs_review"`
-  ReviewReasons []string `json:"review_reasons"`
-  ```
-  Populate via deterministic rules after the LLM returns:
-  - Transcript too short relative to audio duration → review
-  - Entity arrays (people/places/orgs) empty on a long recording → review
-  - Title contains a date string not found verbatim in the transcript → review
-  - Repeated-phrase hallucination detected in the transcript → review
-  - Voicemail classification but no caller/recipient extracted → review
-  - LLM and regex scripture extraction diverge significantly → review
-  Use this flag to **gate remanence-archive uploads**: items marked
-  `needs_review: true` require explicit approval before being pushed
-  upstream. This matches the drafts-by-default design in
-  [remanence-integration.md](remanence-integration.md) and makes the
-  "honest degradation" goal in our design principles *concrete* rather
-  than aspirational.
+The proposal: a regex + canonical book-name list (including common
+abbreviations like "1 Cor." and "Rev.") that finds every
+`Book chapter:verse` pattern in a transcript with near-zero false
+positives. Run this extractor in Go, store the results directly on the
+summary, and let the LLM only identify the *primary* scripture focus
+(which is a judgment call) rather than trying to enumerate all
+references (which is a counting problem it fails at).
 
-- **Snapshot test harness.** Pick ~10 representative recordings (a
-  sermon, a voicemail, a music recording, an audio diary, a field
-  recording, etc.) and commit an "expected-ish" JSON snapshot for each:
-  - Expected `recording_type` (exact match)
-  - Expected number range for `main_topics`, `tags`, `people`, etc.
-  - Expected `bible_references` count ± tolerance
-  - Expected title to match a regex pattern (not exact string, since
-    LLM output varies)
-  - `needs_review` flag expected state
-  Run the suite on every prompt change, model swap, or extraction
-  refactor. Compare against baseline before merging. Prevents silent
-  regressions during optimization work. The accordion file and the
-  voicemail we used during today's testing are natural starter cases
-  since we have real debug traces for both.
+This would be a smaller-surface-area, higher-reliability version of
+the deterministic proper-noun extraction idea, and arguably should
+ship first since the grammar is more constrained. It would directly
+fix the "1-to-10 references on the same input" flakiness noted in the
+known-flaky section.
+
+#### Template-based title generation
+
+**Status:** not yet implemented. **Estimated effort:** ~30 minutes once
+the universal extraction fields are reliable.
+
+The proposal: stop asking the LLM to "generate a title" freeform (which
+is why we see hallucinated date ranges like "Voicemails with Martin
+(April 10 - April 16)"). Replace with type-aware templates that compose
+from already-extracted fields:
+
+- voicemail → `"Voicemail from {caller}"` or `"Voicemail for {recipient}"`
+- sermon → `"{speaker} — {scripture_focus}"` or `"{series} — {theme}"`
+- musical_performance → `"{source_title}"` or `"{ensemble_type} — {piece}"`
+- field_recording → `"{source_title}"` or inferred setting
+- fallback → source filename stem
+
+This would eliminate an entire class of hallucination without needing
+better models or better prompts.
+
+#### Confidence scoring + `needs_review` flag
+
+**Status:** not yet implemented. **Estimated effort:** ~90 minutes
+including rule implementation and test coverage. No `NeedsReview` or
+`ReviewReasons` fields exist on `RecordingSummary` today — the proposal
+below describes the additions.
+
+The proposal: add new fields to `RecordingSummary`:
+
+```go
+// PROPOSED — not yet present on the struct:
+NeedsReview   bool     `json:"needs_review"`
+ReviewReasons []string `json:"review_reasons"`
+```
+
+Populate via deterministic rules after the LLM returns:
+
+- Transcript too short relative to audio duration → review
+- Entity arrays (people/places/orgs) empty on a long recording → review
+- Title contains a date string not found verbatim in the transcript → review
+- Repeated-phrase hallucination detected in the transcript → review
+- Voicemail classification but no caller/recipient extracted → review
+- LLM and regex scripture extraction diverge significantly → review
+
+The flag would then be used to **gate remanence-archive uploads**:
+items marked `needs_review: true` require explicit approval before
+being pushed upstream. This matches the drafts-by-default design in
+[remanence-integration.md](remanence-integration.md) and would make
+the "honest degradation" goal in our design principles *concrete*
+rather than aspirational.
+
+#### Snapshot test harness
+
+**Status:** not yet implemented. **Estimated effort:** ~2 hours to
+pick recordings, commit snapshots, and wire up tolerance-based
+comparison.
+
+The proposal: pick ~10 representative recordings (a sermon, a
+voicemail, a music recording, an audio diary, a field recording, etc.)
+and commit an "expected-ish" JSON snapshot for each:
+
+- Expected `recording_type` (exact match)
+- Expected number range for `main_topics`, `tags`, `people`, etc.
+- Expected `bible_references` count ± tolerance
+- Expected title to match a regex pattern (not an exact string, since
+  LLM output varies)
+- `needs_review` flag expected state
+
+Run the suite on every prompt change, model swap, or extraction
+refactor. Compare against baseline before merging to prevent silent
+regressions during optimization work. The accordion file and the
+voicemail used during today's testing are natural starter cases since
+we have real debug traces for both.
 
 ## Future work
 
