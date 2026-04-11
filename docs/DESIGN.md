@@ -690,37 +690,111 @@ These are smaller but still worthwhile, roughly in order of value:
   additions without hitting context window issues. Same speed per
   token. ~2x the RAM usage (~7 GB loaded vs ~4.5 GB).
 
+### Quality and reliability wins
+
+Speed isn't the only ceiling. Entity extraction, title generation, and
+reference counts are currently flaky because they rely on Mistral 7B
+"noticing" facts in the transcript. The right move is to **shrink the
+surface area where LLM reliability matters** — do deterministic
+extraction for the fields users will treat as factual, and keep the
+LLM for narrative prose and broad classification where variance is
+acceptable.
+
+- **Deterministic Bible reference extraction.** A regex + canonical
+  book-name list (including common abbreviations like "1 Cor." and
+  "Rev.") can find every `Book chapter:verse` pattern in a transcript
+  with near-zero false positives. Run this extractor in Go, store the
+  results directly on the summary, and let the LLM only identify the
+  *primary* scripture focus (which is a judgment call) rather than
+  trying to enumerate all references (which is a counting problem it
+  fails at). This is a smaller-surface-area, higher-reliability version
+  of the deterministic proper-noun extraction idea, and arguably should
+  ship first since the grammar is more constrained. Directly fixes the
+  "1-to-10 references on the same input" flakiness noted in the
+  known-flaky section.
+
+- **Template-based title generation.** Currently the LLM is asked to
+  "generate a title" freeform, which is why we see hallucinated date
+  ranges like "Voicemails with Martin (April 10 - April 16)". Replace
+  with type-aware templates that compose from already-extracted fields:
+  - voicemail → `"Voicemail from {caller}"` or `"Voicemail for {recipient}"`
+  - sermon → `"{speaker} — {scripture_focus}"` or `"{series} — {theme}"`
+  - musical_performance → `"{source_title}"` or `"{ensemble_type} — {piece}"`
+  - field_recording → `"{source_title}"` or inferred setting
+  - fallback → source filename stem
+  Eliminates an entire class of hallucination without needing better
+  models or better prompts.
+
+- **Confidence scoring + `needs_review` flag.** Add to
+  `RecordingSummary`:
+  ```go
+  NeedsReview   bool     `json:"needs_review"`
+  ReviewReasons []string `json:"review_reasons"`
+  ```
+  Populate via deterministic rules after the LLM returns:
+  - Transcript too short relative to audio duration → review
+  - Entity arrays (people/places/orgs) empty on a long recording → review
+  - Title contains a date string not found verbatim in the transcript → review
+  - Repeated-phrase hallucination detected in the transcript → review
+  - Voicemail classification but no caller/recipient extracted → review
+  - LLM and regex scripture extraction diverge significantly → review
+  Use this flag to **gate remanence-archive uploads**: items marked
+  `needs_review: true` require explicit approval before being pushed
+  upstream. This matches the drafts-by-default design in
+  [remanence-integration.md](remanence-integration.md) and makes the
+  "honest degradation" goal in our design principles *concrete* rather
+  than aspirational.
+
+- **Snapshot test harness.** Pick ~10 representative recordings (a
+  sermon, a voicemail, a music recording, an audio diary, a field
+  recording, etc.) and commit an "expected-ish" JSON snapshot for each:
+  - Expected `recording_type` (exact match)
+  - Expected number range for `main_topics`, `tags`, `people`, etc.
+  - Expected `bible_references` count ± tolerance
+  - Expected title to match a regex pattern (not exact string, since
+    LLM output varies)
+  - `needs_review` flag expected state
+  Run the suite on every prompt change, model swap, or extraction
+  refactor. Compare against baseline before merging. Prevents silent
+  regressions during optimization work. The accordion file and the
+  voicemail we used during today's testing are natural starter cases
+  since we have real debug traces for both.
+
 ## Future work
 
-2. **Larger LLM comparison.** Test with `llama3.1:8b` and `gemma2:9b`
+Ordered roughly by value:
+
+1. **Larger LLM comparison.** Test with `llama3.1:8b` and `gemma2:9b`
    via the existing Ollama client. Both should be better at
    instruction following than Mistral 7B. Drop-in change via
-   `--model` flag.
+   `--model` flag. High info-per-dollar because it's basically free
+   to try — worth doing early in any quality improvement push, since
+   it tells us whether the remaining flakiness is a prompt ceiling or
+   a model ceiling.
 
-3. **Remanence integration.** Add a `sync` job type that uploads the
+2. **Remanence integration.** Add a `sync` job type that uploads the
    prepared audio + transcript + metadata to remanence-archive via
    a new `POST /api/sync` endpoint. Design sketched in
-   [remanence-integration.md](remanence-integration.md).
+   [remanence-integration.md](remanence-integration.md). Should use
+   the `needs_review` flag (see Quality and reliability wins above)
+   to block auto-upload for low-confidence items.
 
-4. **iCloud Drive inbox.** Symlink `~/audio-inbox/` into iCloud Drive
+3. **iCloud Drive inbox.** Symlink `~/audio-inbox/` into iCloud Drive
    so you can drop files from your iPhone or iPad. They sync to the
    Mac, the watcher picks them up automatically. Zero code changes
    required.
 
-5. **`archive browse` TUI.** Interactive browser to navigate
+4. **`archive browse` TUI.** Interactive browser to navigate
    recordings: filter by type/speaker/date, search transcripts,
    view summaries. Go has several TUI libraries (`bubbletea`,
    `tview`) that would suit this.
 
-6. **Two-pass summarization.** Split stage 3 into "classify +
-   universal extraction" and "type-specific extraction." Slower but
-   higher quality, especially for entity density.
-
-7. **Hallucination detection on transcripts.** Even with VAD, Whisper
+5. **Hallucination detection on transcripts.** Even with VAD, Whisper
    can still produce repeated phrases. Detect patterns like "same
    sentence repeated N times" as a post-processing quality check.
+   Hooks naturally into the `needs_review` flag.
 
-8. **Audio-level classification hint.** Run a simple music vs speech
+6. **Audio-level classification hint.** Run a simple music vs speech
    detector on the audio itself (not the transcript) as another
    classification signal. Tools like `librosa` or Go audio libraries
    could do this cheaply.
