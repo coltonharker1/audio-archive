@@ -58,8 +58,12 @@ func PrepRecording(ctx context.Context, cfg config.Config, db *store.DB, recordi
 	slog.Info("preparing audio", "input", masterAbs, "output", outputAbs)
 	start := time.Now()
 
-	// Apply a 10-minute cap on individual prep jobs
-	prepCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	// Apply a 60-minute cap on individual prep jobs. Long tape recordings
+	// with the loudnorm filter can legitimately take 10-30+ minutes, so a
+	// 10-minute cap was killing legitimate work. The new filter chain
+	// (downsample-first) is much faster but we keep the cap generous to
+	// handle edge cases like very long files or slow disks.
+	prepCtx, cancel := context.WithTimeout(ctx, 60*time.Minute)
 	defer cancel()
 
 	if err := audio.PrepareAudio(prepCtx, cfg.Ffmpeg, masterAbs, outputAbs); err != nil {

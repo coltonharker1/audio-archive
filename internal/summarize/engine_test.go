@@ -444,6 +444,54 @@ func TestComputeSpeechDensity_ZeroDuration(t *testing.T) {
 	}
 }
 
+// ---- Prompt size regression guard ----
+
+// TestExtractPromptSize prevents the stage 3 extraction prompt from
+// bloating back to the point where it overflows Mistral's 8K context
+// window. A long history of iterative prompt additions caused a real
+// bug where summaries took 10+ minutes instead of 30 seconds because
+// the prompt + content exceeded the window and Ollama fell into
+// sliding-window mode.
+//
+// The TEMPLATE (instructions, taxonomy, type guide) should stay under
+// ~2500 words. The actual content (merged summary, chunk summaries)
+// is variable per recording and we accept those costs — but the
+// fixed-cost template must stay small.
+func TestExtractPromptSize(t *testing.T) {
+	density := SpeechDensity{
+		WordsPerMinute: 100,
+		Classification: "normal",
+		Description:    "~100 words per minute — normal speech density.",
+	}
+
+	// Pass empty strings for the variable-size content; we only want
+	// to measure the template + taxonomy + type guide.
+	prompt := fmtExtractPrompt("", "", density, "No file metadata available.")
+	words := len(strings.Fields(prompt))
+
+	// Budget: 2500 words is ~3300 tokens, well under 8K.
+	const maxTemplateWords = 2500
+	if words > maxTemplateWords {
+		t.Errorf("extract prompt template is %d words, budget is %d.\n"+
+			"Prompt bloat caused a production bug; keep it tight.\n"+
+			"Current prompt:\n%s",
+			words, maxTemplateWords, prompt)
+	}
+
+	// Also make sure it's not accidentally empty or missing critical pieces
+	if !strings.Contains(prompt, "recording_type") {
+		t.Error("prompt missing recording_type reference")
+	}
+	if !strings.Contains(prompt, "people") || !strings.Contains(prompt, "places") {
+		t.Error("prompt missing universal entity fields")
+	}
+	if !strings.Contains(prompt, string(TypeSermon)) {
+		t.Error("prompt missing type taxonomy")
+	}
+
+	t.Logf("extract prompt template size: %d words", words)
+}
+
 // ---- Known types completeness ----
 
 func TestKnownRecordingTypesCoversConstants(t *testing.T) {
