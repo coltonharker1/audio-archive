@@ -68,6 +68,25 @@ func (db *DB) UpdatePrepPath(id int64, prepPath string) error {
 	return err
 }
 
+// UpdateRecordingMetadata backfills title, speaker, and date on a recording
+// row, but only for fields that are currently empty. This preserves any
+// values the user explicitly provided via --speaker, --date, or --title at
+// ingest time while enriching the rest from the summarization output.
+//
+// Called by the pipeline after a successful summarize so that `archive list`
+// shows meaningful metadata instead of empty columns.
+func (db *DB) UpdateRecordingMetadata(id int64, title, speaker, date string) error {
+	_, err := db.conn.Exec(`
+		UPDATE recordings
+		SET title   = CASE WHEN COALESCE(title, '')   = '' THEN ? ELSE title   END,
+		    speaker = CASE WHEN COALESCE(speaker, '') = '' THEN ? ELSE speaker END,
+		    date    = CASE WHEN COALESCE(date, '')    = '' THEN ? ELSE date    END,
+		    updated_at = datetime('now')
+		WHERE id = ?`,
+		title, speaker, date, id)
+	return err
+}
+
 // GetRecordingIDByMasterPath looks up a recording ID by its relative master path.
 // Returns sql.ErrNoRows if not found.
 func (db *DB) GetRecordingIDByMasterPath(masterPath string) (int64, error) {

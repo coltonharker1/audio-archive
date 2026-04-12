@@ -93,9 +93,24 @@ func SummarizeRecording(ctx context.Context, cfg config.Config, db *store.DB, re
 	summary := result.Metadata
 
 	// Save to database
-	sumID, err := db.SaveSummary(recordingID, summary, cfg.OllamaModel)
+	modelUsed := cfg.OllamaModel
+	if cfg.SummarizeEngine == "claude" {
+		modelUsed = "claude"
+	}
+	sumID, err := db.SaveSummary(recordingID, summary, modelUsed)
 	if err != nil {
 		return nil, fmt.Errorf("saving summary: %w", err)
+	}
+
+	// Backfill recording metadata from the summary so `archive list` shows
+	// meaningful titles, speakers, and dates instead of empty columns.
+	// Only fills fields the user didn't already set at ingest time.
+	speaker := ""
+	if len(summary.Speakers) > 0 {
+		speaker = summary.Speakers[0]
+	}
+	if err := db.UpdateRecordingMetadata(recordingID, summary.SuggestedTitle, speaker, summary.EstimatedDate); err != nil {
+		slog.Warn("failed to backfill recording metadata from summary", "recording", recordingID, "error", err)
 	}
 
 	// Write final .meta.json file
