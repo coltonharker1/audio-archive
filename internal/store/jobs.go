@@ -34,6 +34,29 @@ var defaultMaxRetries = map[JobType]int{
 	JobSummarize:  2,
 }
 
+// predecessorType maps each job type to the job type it depends on for the
+// same recording. Prep has no predecessor (it runs on the master file).
+// Transcribe depends on prep producing the normalized audio; summarize
+// depends on transcribe producing the transcript text. Used by the claim
+// query to filter out ineligible jobs, and by MarkJobFailed to cascade
+// failure to downstream stages of the same recording.
+var predecessorType = map[JobType]JobType{
+	JobTranscribe: JobPrep,
+	JobSummarize:  JobTranscribe,
+}
+
+// successorTypes maps each job type to the downstream job types for the
+// same recording that become unrunnable if this one fails permanently.
+// Used by MarkJobFailed to cascade-fail dependents so they don't sit in
+// pending forever (before: they'd stay pending; or worse, under the old
+// dispatcher, they'd be claimed anyway and burn their retry budget on
+// "no transcript — transcribe first" errors).
+var successorTypes = map[JobType][]JobType{
+	JobPrep:       {JobTranscribe, JobSummarize},
+	JobTranscribe: {JobSummarize},
+	JobSummarize:  nil,
+}
+
 // Job is a single unit of work in the queue.
 type Job struct {
 	ID          int64
@@ -71,7 +94,18 @@ func (db *DB) EnqueueJob(recordingID int64, jobType JobType) (int64, error) {
 
 // ClaimNextPendingJob atomically fetches the oldest pending job and marks
 // it as running, returning the claimed job. It skips jobs that have been
-// updated recently (for retry backoff). Returns ErrNoJob if nothing is ready.
+// updated recently (for retry backoff) and jobs whose predecessor stage
+// for the same recording has not completed yet. Returns ErrNoJob if
+// nothing is ready.
+//
+// Predecessor filtering: a summarize job for recording N is only eligible
+// when a transcribe job for recording N is in state 'complete'. Likewise
+// transcribe requires a complete prep. Without this filter, the dispatcher
+// could claim a summarize whose transcribe was still pending/running/failed
+// and the handler would immediately error with "no transcript — transcribe
+// first", burning the retry budget for no reason. (Evidence: the 2026-04-11
+// rec-6 cascade, where 2 summarize jobs failed permanently for exactly
+// this reason.)
 //
 // Note: the claim increments attempt and sets status=running, but leaves
 // started_at to be set by the worker via MarkJobStarted once execution
@@ -83,16 +117,33 @@ func (db *DB) ClaimNextPendingJob() (*Job, error) {
 	// Backoff: jobs that previously finished (with failure leading to retry)
 	// must wait attempt * backoffSecondsPerAttempt before being reclaimed.
 	// First-attempt jobs have finished_at NULL so are immediately eligible.
+	//
+	// Predecessor filter: a job is eligible only if it has no predecessor
+	// stage (prep), OR a completed predecessor exists for the same recording.
+	// Encoded as a CASE expression in the subquery WHERE clause because the
+	// predecessor type depends on the candidate job's type.
 	query := fmt.Sprintf(`
 		UPDATE jobs
 		SET status = 'running',
 		    attempt = attempt + 1
 		WHERE id = (
-			SELECT id FROM jobs
-			WHERE status = 'pending'
-			  AND (finished_at IS NULL
-			       OR datetime(finished_at, '+' || (attempt * %d) || ' seconds') <= datetime('now'))
-			ORDER BY created_at
+			SELECT id FROM jobs AS j
+			WHERE j.status = 'pending'
+			  AND (j.finished_at IS NULL
+			       OR datetime(j.finished_at, '+' || (j.attempt * %d) || ' seconds') <= datetime('now'))
+			  AND (
+			       j.type = 'prep'
+			       OR EXISTS (
+			            SELECT 1 FROM jobs AS p
+			            WHERE p.recording_id = j.recording_id
+			              AND p.status = 'complete'
+			              AND p.type = CASE j.type
+			                             WHEN 'transcribe' THEN 'prep'
+			                             WHEN 'summarize'  THEN 'transcribe'
+			                           END
+			       )
+			  )
+			ORDER BY j.created_at
 			LIMIT 1
 		)
 		RETURNING id, recording_id, type, status, attempt, max_retries,
@@ -142,15 +193,63 @@ func (db *DB) MarkJobComplete(id int64) error {
 	return err
 }
 
-// MarkJobFailed transitions a job to terminal failed status with an error message.
+// MarkJobFailed transitions a job to terminal failed status with an error
+// message, and also cascade-fails any downstream pending jobs for the same
+// recording so they don't sit in pending forever (the predecessor filter
+// in ClaimNextPendingJob would refuse to claim them otherwise) or — under
+// older versions of the dispatcher — burn their retry budget on
+// "no transcript — transcribe first" style errors.
+//
+// Cascade scope: prep failure fails transcribe + summarize for the same
+// recording; transcribe failure fails summarize for the same recording;
+// summarize failure cascades to nothing. Only jobs in pending/running
+// state are cascaded — jobs already complete or failed are left alone.
 func (db *DB) MarkJobFailed(id int64, errMsg string) error {
-	_, err := db.conn.Exec(`
+	// First mark this job failed so callers always see the primary
+	// state change even if the cascade query has an issue.
+	if _, err := db.conn.Exec(`
 		UPDATE jobs
 		SET status = 'failed',
 		    finished_at = datetime('now'),
 		    error = ?
-		WHERE id = ?`, errMsg, id)
-	return err
+		WHERE id = ?`, errMsg, id); err != nil {
+		return err
+	}
+
+	// Look up the just-failed job so we know its type and recording_id
+	// without making the caller pass them.
+	var failedType string
+	var recordingID int64
+	if err := db.conn.QueryRow(`
+		SELECT type, recording_id FROM jobs WHERE id = ?`, id).Scan(&failedType, &recordingID); err != nil {
+		// If this lookup fails we've still marked the primary job
+		// failed, so return nil — the cascade is best-effort.
+		return nil
+	}
+
+	successors, ok := successorTypes[JobType(failedType)]
+	if !ok || len(successors) == 0 {
+		return nil
+	}
+
+	// Build the successor IN (...) list inline. Go's database/sql doesn't
+	// have first-class slice binding for sqlite, and the type list is
+	// short + closed, so inline is fine and injection-safe.
+	inList := "'" + string(successors[0]) + "'"
+	for _, t := range successors[1:] {
+		inList += ",'" + string(t) + "'"
+	}
+
+	cascadeMsg := fmt.Sprintf("cascade: predecessor %s failed for this recording", failedType)
+	_, _ = db.conn.Exec(fmt.Sprintf(`
+		UPDATE jobs
+		SET status = 'failed',
+		    finished_at = datetime('now'),
+		    error = ?
+		WHERE recording_id = ?
+		  AND status IN ('pending', 'running')
+		  AND type IN (%s)`, inList), cascadeMsg, recordingID)
+	return nil
 }
 
 // MarkJobPendingRetry returns a job to pending status for retry. The attempt

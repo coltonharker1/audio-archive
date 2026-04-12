@@ -121,11 +121,15 @@ func TestClaimNextPendingJob_Empty(t *testing.T) {
 func TestClaimNextPendingJob_ReturnsOldestFirst(t *testing.T) {
 	db := newTestDB(t)
 	recID := newTestRecording(t, db)
+	otherID := newTestRecording(t, db) // independent recording for the second prep
 
 	firstID, _ := db.EnqueueJob(recID, JobPrep)
 	// created_at has second-level resolution, so force a delta to avoid ties
 	time.Sleep(1100 * time.Millisecond)
-	secondID, _ := db.EnqueueJob(recID, JobTranscribe)
+	// Second prep is on an *independent* recording so the predecessor filter
+	// (which forbids claiming transcribe/summarize while their same-recording
+	// predecessor is incomplete) doesn't interfere with this ordering test.
+	secondID, _ := db.EnqueueJob(otherID, JobPrep)
 
 	job, err := db.ClaimNextPendingJob()
 	if err != nil {
@@ -303,6 +307,199 @@ func TestMarkJobFailed(t *testing.T) {
 	}
 	if jobs[0].FinishedAt == nil {
 		t.Error("finished_at should be set on failure")
+	}
+}
+
+// ---- Predecessor dependency filter ----
+
+// summarize must NOT be claimed while its transcribe predecessor is still
+// pending — the handler would immediately error with "no transcript" and
+// burn the retry budget. Reproduces the 2026-04-11 rec-6 cascade.
+func TestClaimNextPendingJob_SummarizeBlockedUntilTranscribeComplete(t *testing.T) {
+	db := newTestDB(t)
+	recID := newTestRecording(t, db)
+
+	_, _ = db.EnqueueJob(recID, JobPrep)
+	txID, _ := db.EnqueueJob(recID, JobTranscribe)
+	_, _ = db.EnqueueJob(recID, JobSummarize)
+
+	// Claim 1: only prep is eligible. Mark it complete.
+	j1, err := db.ClaimNextPendingJob()
+	if err != nil {
+		t.Fatalf("claim prep: %v", err)
+	}
+	if j1.Type != JobPrep {
+		t.Fatalf("claim 1 type = %s, want prep", j1.Type)
+	}
+	if err := db.MarkJobComplete(j1.ID); err != nil {
+		t.Fatalf("mark prep complete: %v", err)
+	}
+
+	// Claim 2: now transcribe becomes eligible (prep is complete). But
+	// summarize still must not be claimed because transcribe is not yet
+	// complete — it's only claimed.
+	j2, err := db.ClaimNextPendingJob()
+	if err != nil {
+		t.Fatalf("claim transcribe: %v", err)
+	}
+	if j2.Type != JobTranscribe {
+		t.Fatalf("claim 2 type = %s, want transcribe", j2.Type)
+	}
+	if j2.ID != txID {
+		t.Fatalf("claim 2 id = %d, want %d", j2.ID, txID)
+	}
+
+	// Claim 3: summarize should NOT yet be eligible — transcribe is
+	// 'running', not 'complete'.
+	_, err = db.ClaimNextPendingJob()
+	if !errors.Is(err, ErrNoJob) {
+		t.Fatalf("expected ErrNoJob while transcribe is running, got %v", err)
+	}
+
+	// Now complete the transcribe. Summarize should become claimable.
+	if err := db.MarkJobComplete(j2.ID); err != nil {
+		t.Fatalf("mark transcribe complete: %v", err)
+	}
+	j3, err := db.ClaimNextPendingJob()
+	if err != nil {
+		t.Fatalf("claim summarize: %v", err)
+	}
+	if j3.Type != JobSummarize {
+		t.Fatalf("claim 3 type = %s, want summarize", j3.Type)
+	}
+}
+
+// Even when a prep is running (not complete), transcribe for the same
+// recording is not claimable. Independent recordings aren't affected.
+func TestClaimNextPendingJob_PredecessorFilterIsPerRecording(t *testing.T) {
+	db := newTestDB(t)
+	recA := newTestRecording(t, db)
+	recB := newTestRecording(t, db)
+
+	// Rec A: prep enqueued, will be claimed but not completed.
+	_, _ = db.EnqueueJob(recA, JobPrep)
+	_, _ = db.EnqueueJob(recA, JobTranscribe)
+	// Rec B: independent prep + transcribe.
+	_, _ = db.EnqueueJob(recB, JobPrep)
+
+	// Claim rec A prep (goes to running).
+	j1, _ := db.ClaimNextPendingJob()
+	if j1.RecordingID != recA || j1.Type != JobPrep {
+		t.Fatalf("claim 1 = rec=%d type=%s, want recA prep", j1.RecordingID, j1.Type)
+	}
+
+	// Claim 2: rec A transcribe is blocked (rec A prep is only running,
+	// not complete). Rec B prep should be claimed instead.
+	j2, err := db.ClaimNextPendingJob()
+	if err != nil {
+		t.Fatalf("claim 2: %v", err)
+	}
+	if j2.RecordingID != recB || j2.Type != JobPrep {
+		t.Errorf("claim 2 = rec=%d type=%s, want recB prep", j2.RecordingID, j2.Type)
+	}
+}
+
+// ---- Cascade failure ----
+
+// When a transcribe job fails terminally, the summarize for the same
+// recording should be cascade-failed (not left in pending forever, since
+// the predecessor filter would never let it be claimed again).
+func TestMarkJobFailed_CascadesToDependents(t *testing.T) {
+	db := newTestDB(t)
+	recID := newTestRecording(t, db)
+	otherID := newTestRecording(t, db)
+
+	prepID, _ := db.EnqueueJob(recID, JobPrep)
+	txID, _ := db.EnqueueJob(recID, JobTranscribe)
+	sumID, _ := db.EnqueueJob(recID, JobSummarize)
+	// Jobs on a different recording must NOT be affected by the cascade.
+	otherPrepID, _ := db.EnqueueJob(otherID, JobPrep)
+
+	// Mark prep complete so transcribe is meaningful to fail.
+	if err := db.MarkJobComplete(prepID); err != nil {
+		t.Fatalf("prep complete: %v", err)
+	}
+
+	// Terminally fail the transcribe. Should cascade to summarize for
+	// the same recording only.
+	if err := db.MarkJobFailed(txID, "whisper crashed"); err != nil {
+		t.Fatalf("mark tx failed: %v", err)
+	}
+
+	jobs, _ := db.ListRecentJobs(100)
+	byID := map[int64]Job{}
+	for _, j := range jobs {
+		byID[j.ID] = j
+	}
+
+	if byID[txID].Status != StatusFailed {
+		t.Errorf("transcribe status = %s, want failed", byID[txID].Status)
+	}
+	if byID[sumID].Status != StatusFailed {
+		t.Errorf("summarize status = %s, want failed (cascade)", byID[sumID].Status)
+	}
+	if byID[sumID].Error == "" || byID[sumID].Error == "whisper crashed" {
+		t.Errorf("summarize error did not get cascade message: %q", byID[sumID].Error)
+	}
+	if byID[otherPrepID].Status != StatusPending {
+		t.Errorf("independent recording's job was cascaded: status=%s", byID[otherPrepID].Status)
+	}
+}
+
+// prep failure should cascade to BOTH transcribe and summarize for the
+// same recording, since they're both downstream.
+func TestMarkJobFailed_PrepCascadesToTranscribeAndSummarize(t *testing.T) {
+	db := newTestDB(t)
+	recID := newTestRecording(t, db)
+
+	prepID, _ := db.EnqueueJob(recID, JobPrep)
+	txID, _ := db.EnqueueJob(recID, JobTranscribe)
+	sumID, _ := db.EnqueueJob(recID, JobSummarize)
+
+	if err := db.MarkJobFailed(prepID, "ffmpeg died"); err != nil {
+		t.Fatalf("mark prep failed: %v", err)
+	}
+
+	jobs, _ := db.ListRecentJobs(100)
+	byID := map[int64]Job{}
+	for _, j := range jobs {
+		byID[j.ID] = j
+	}
+	if byID[txID].Status != StatusFailed {
+		t.Errorf("transcribe should be cascaded failed, got %s", byID[txID].Status)
+	}
+	if byID[sumID].Status != StatusFailed {
+		t.Errorf("summarize should be cascaded failed, got %s", byID[sumID].Status)
+	}
+}
+
+// summarize has no downstream stage; its failure should not affect
+// anything else.
+func TestMarkJobFailed_SummarizeCascadesToNothing(t *testing.T) {
+	db := newTestDB(t)
+	recID := newTestRecording(t, db)
+
+	prepID, _ := db.EnqueueJob(recID, JobPrep)
+	txID, _ := db.EnqueueJob(recID, JobTranscribe)
+	sumID, _ := db.EnqueueJob(recID, JobSummarize)
+
+	if err := db.MarkJobFailed(sumID, "ollama unreachable"); err != nil {
+		t.Fatalf("mark sum failed: %v", err)
+	}
+
+	jobs, _ := db.ListRecentJobs(100)
+	byID := map[int64]Job{}
+	for _, j := range jobs {
+		byID[j.ID] = j
+	}
+	if byID[prepID].Status != StatusPending {
+		t.Errorf("prep should be untouched, got %s", byID[prepID].Status)
+	}
+	if byID[txID].Status != StatusPending {
+		t.Errorf("transcribe should be untouched, got %s", byID[txID].Status)
+	}
+	if byID[sumID].Status != StatusFailed {
+		t.Errorf("summarize status = %s, want failed", byID[sumID].Status)
 	}
 }
 
