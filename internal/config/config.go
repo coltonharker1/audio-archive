@@ -38,7 +38,7 @@ func Default() Config {
 		WhisperCppModel:    filepath.Join(dataDir, "models", "ggml-base.en.bin"),
 		WhisperCppVADModel: filepath.Join(dataDir, "models", "ggml-silero-v5.1.2.bin"),
 		SummarizeEngine:    "claude",
-		ClaudeBin:          "claude",
+		ClaudeBin:          filepath.Join(home, ".local", "bin", "claude"),
 		OllamaModel:        "mistral",
 	}
 }
