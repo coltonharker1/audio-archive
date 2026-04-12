@@ -54,15 +54,31 @@ func SummarizeRecording(ctx context.Context, cfg config.Config, db *store.DB, re
 		return nil, fmt.Errorf("creating debug dir: %w", err)
 	}
 
-	slog.Info("summarizing", "words", len(strings.Fields(tx.FullText)), "model", cfg.OllamaModel)
+	slog.Info("summarizing",
+		"words", len(strings.Fields(tx.FullText)),
+		"engine", cfg.SummarizeEngine)
 	start := time.Now()
 
-	// 30-minute cap per summarization job
-	sumCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	// 5-minute cap for claude (network), 30-minute cap for ollama (local).
+	timeout := 30 * time.Minute
+	if cfg.SummarizeEngine == "claude" {
+		timeout = 5 * time.Minute
+	}
+	sumCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	engine := summarize.NewEngine(cfg.OllamaModel)
-	result, err := engine.Summarize(sumCtx, summarize.SummarizeInput{
+	// Select summarization engine based on config.
+	var summarizer interface {
+		Summarize(ctx context.Context, input summarize.SummarizeInput) (*summarize.PipelineResult, error)
+	}
+	switch cfg.SummarizeEngine {
+	case "claude":
+		summarizer = summarize.NewClaudeEngine(cfg.ClaudeBin)
+	default:
+		summarizer = summarize.NewEngine(cfg.OllamaModel)
+	}
+
+	result, err := summarizer.Summarize(sumCtx, summarize.SummarizeInput{
 		Transcript: tx.FullText,
 		DurationMs: rec.DurationMs,
 		Title:      rec.Title,

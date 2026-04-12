@@ -15,7 +15,9 @@ type Config struct {
 	WhisperCppBin      string // path to whisper.cpp CLI binary (e.g. /opt/homebrew/bin/whisper-cli)
 	WhisperCppModel    string // path to GGML speech model file (e.g. ~/.audio-archive/models/ggml-base.en.bin)
 	WhisperCppVADModel string // path to Silero VAD model for whisper.cpp; empty disables VAD
-	OllamaModel        string // Ollama model for summarization
+	SummarizeEngine    string // "claude" (default) or "ollama"
+	ClaudeBin          string // path to the claude CLI binary (for claude engine)
+	OllamaModel        string // Ollama model for summarization (for ollama engine)
 }
 
 // Default returns a Config with sensible defaults. All paths are absolute
@@ -35,6 +37,8 @@ func Default() Config {
 		WhisperCppBin:      "/opt/homebrew/bin/whisper-cli",
 		WhisperCppModel:    filepath.Join(dataDir, "models", "ggml-base.en.bin"),
 		WhisperCppVADModel: filepath.Join(dataDir, "models", "ggml-silero-v5.1.2.bin"),
+		SummarizeEngine:    "claude",
+		ClaudeBin:          "claude",
 		OllamaModel:        "mistral",
 	}
 }
