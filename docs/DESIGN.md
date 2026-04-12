@@ -26,9 +26,97 @@
 > in a fresh session.** It captures where things stand as of the most recent
 > work so you don't have to reconstruct context from git log alone.
 
-**Last updated:** 2026-04-11 (post-whisper.cpp cutover).
+**Last updated:** 2026-04-12 (end of session).
 
-### Session of 2026-04-11 (what happened this morning)
+### Session of 2026-04-11 / 2026-04-12 (marathon session)
+
+**11 commits pushed to `origin/main`.** The pipeline was fundamentally
+transformed in a single session. Summary of what shipped:
+
+1. **Transcribe hang fix** — subprocess safety (`Setpgid`/`Cancel`/`WaitDelay`) for the Python faster-whisper path. Solved the pipe-deadlock that killed the overnight batch.
+
+2. **whisper.cpp cutover** — replaced faster-whisper with native `whisper-cli` + Metal GPU. **33× transcribe speedup** (r005 sermon: 56m→1m41s). Python worker deleted, zero Python in the tree.
+
+3. **launchd QoS fix** — `ProcessType=Background` was throttling whisper-cli to E-cores (~200× slower). Removed from worker plist. Watch daemon keeps Background (appropriate for fsnotify I/O).
+
+4. **Dispatcher bug fixes** — (a) graceful-shutdown `context.Canceled` no longer burns retry attempts; (b) predecessor dependency filter prevents summarize from being claimed before transcribe completes; (c) cascade-fail marks downstream jobs terminal when predecessor fails.
+
+5. **Worker concurrency = 3** — prep, transcribe, and summarize can now run in parallel across different recordings.
+
+6. **Claude Code CLI as summarization engine** — replaced Ollama/Mistral 7B with `claude -p` via subprocess. Single-prompt, no chunking. Dramatic quality improvement: entity extraction went from 0–2 people to 7–27 per sermon; the misclassified `broadcast` is now correctly `lecture` with speaker name and venue identified; bible references are structured with book/chapter/verse; dates are estimated from content not copied from file metadata.
+
+7. **Recording metadata backfill** — post-summarize hook writes title, speaker, and estimated_date back to the recordings row so `archive list` shows meaningful columns.
+
+**End-to-end benchmark (clean batch, all fixes active):**
+9 recordings, ~7 hours of audio, processed from zero in ~20 minutes.
+Zero failures. Compare to the original overnight batch: ~10 hours,
+4/9 completed, 1 hung indefinitely.
+
+### What is working end-to-end
+
+The full "drop a file, get a searchable archive entry" flow is live:
+
+1. Drop any supported audio file in `~/audio-inbox/`.
+2. The **`watch` launchd daemon** detects it via fsnotify, waits for size stability, and ingests.
+3. Prep / transcribe / summarize jobs are enqueued with predecessor dependency ordering.
+4. The **`worker` launchd daemon** (3 goroutines) processes jobs: prep via FFmpeg, transcribe via whisper.cpp + Metal, summarize via Claude Code CLI.
+5. After summarize, recording metadata (title, speaker, date) is backfilled from the summary.
+6. `archive list`, `archive show <id>`, `archive search <phrase>` let you browse.
+
+### First thing to do next session
+
+```bash
+./archive status   # should be 0 pending, 0 failed
+./archive list     # see the enriched metadata
+```
+
+Then start the **remanence integration** — the north star. All prerequisites are met:
+- Summarization quality is publication-ready (Claude)
+- Pipeline handles real tapes robustly (27/27 in latest batch)
+- `archive list` shows meaningful metadata
+
+Work is in two repos:
+1. **remanence-archive**: `ALTER TABLE sounds ADD COLUMN metadata JSONB DEFAULT '{}'`, new `POST /api/sync` endpoint with API-key auth
+2. **audio-archive**: `archive sync <id>` command, `synced_at` + `remanence_catalog_number` tracking columns, upload to R2 via presigned URL
+
+Design is sketched in [remanence-integration.md](remanence-integration.md).
+
+### Key tripwires to remember
+
+- **`ProcessType=Background` MUST NOT be set on the worker launchd plist.** See commit `1f8fac4` and the loud comment in the plist template. Caused ~200× slowdown on whisper.cpp when it was set.
+- **`applySubprocessSafety` in `internal/transcribe/subprocess.go` is load-bearing.** The `Setpgid` + custom `Cancel` + `WaitDelay` trio prevents pipe-deadlock hangs. `TestTranscribeSubprocessSafety_GrandchildDoesNotHang` is the regression guard.
+- **whisper.cpp is the only transcribe backend now.** No Python anywhere. If reintroducing Python for any reason, you'll need the multiprocessing pipe-deadlock protections again.
+- **Claude CLI path must be absolute in config** (`~/.local/bin/claude`). launchd's PATH doesn't include `~/.local/bin`. Same class of bug as the original whisper-cli PATH issue.
+- **Run-to-run LLM variance is much lower with Claude** but not zero. The same recording re-summarized may produce slightly different entity counts or phrasings.
+- **`SetMaxOpenConns(1)` on the SQLite connection is still load-bearing** — eliminates SQLITE_BUSY errors from concurrent writes.
+- **The predecessor dependency filter in `ClaimNextPendingJob`** uses a NOT EXISTS subquery. If you add a new job type, add its predecessor mapping to `predecessorType` in `internal/store/jobs.go` or it won't be dependency-gated.
+
+### Quick reference to where things live
+
+| What | Where |
+|---|---|
+| CLI entry point | `cmd/archive/main.go` |
+| Pipeline logic (pure functions) | `internal/pipeline/` |
+| Job manager + handlers | `internal/jobs/` |
+| SQLite store + migrations | `internal/store/` |
+| Summarization — Claude engine | `internal/summarize/claude.go` |
+| Summarization — Ollama engine (offline fallback) | `internal/summarize/engine.go` |
+| Summarization types + model profiles | `internal/summarize/types.go` |
+| whisper.cpp wrapper (active transcribe backend) | `internal/transcribe/whispercpp.go` |
+| Shared transcribe types (`Result`, `Segment`) | `internal/transcribe/types.go` |
+| Subprocess safety (process group + WaitDelay) | `internal/transcribe/subprocess.go` |
+| Folder watcher | `internal/watcher/` |
+| launchd plist templates | `scripts/launchd/` |
+| Daemon install/uninstall | `Makefile` |
+| Config (paths, engine selection) | `internal/config/config.go` |
+| Archive data root | `~/.audio-archive/` |
+| whisper.cpp model files | `~/.audio-archive/models/` |
+| Inbox directory | `~/audio-inbox/` |
+| Daemon logs | `~/.audio-archive/logs/{watch,worker}.{log,err}` |
+
+---
+
+### Previous session notes (2026-04-11 morning — retained for context)
 
 Came back to a **stuck queue**: `./archive status` showed 13 pending, 4 running, 10 complete on the overnight batch that was supposed to process 9 recordings. Daemons were alive at 0% CPU; last `worker.err` activity was at 07:44:51 starting a transcribe on `r002-t1-7inch.prep.wav`. No Python subprocess alive beneath the Go worker. Classic pipe-deadlock.
 
