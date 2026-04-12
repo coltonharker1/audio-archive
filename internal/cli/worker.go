@@ -28,7 +28,7 @@ are automatically reset to 'pending' for retry.`,
 }
 
 func init() {
-	workerCmd.Flags().IntVar(&workerConcurrency, "concurrency", 1, "number of worker goroutines")
+	workerCmd.Flags().IntVar(&workerConcurrency, "concurrency", 3, "number of worker goroutines")
 	RootCmd.AddCommand(workerCmd)
 }
 
