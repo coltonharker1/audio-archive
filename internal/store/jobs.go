@@ -166,6 +166,35 @@ func (db *DB) MarkJobPendingRetry(id int64, errMsg string) error {
 	return err
 }
 
+// MarkJobPendingCanceled returns a claimed-but-uncompleted job to pending
+// state WITHOUT counting against its retry budget. Use this when a job was
+// interrupted by a user-initiated cancellation (graceful daemon shutdown,
+// `make reinstall-daemons`, etc.) rather than a genuine handler failure —
+// the job didn't get a fair try, so it shouldn't burn an attempt.
+//
+// Unlike MarkJobPendingRetry, this decrements the attempt counter (which
+// was incremented at claim time in ClaimNextPendingJob), so the next claim
+// will treat this as if the previous one never happened. finished_at is
+// deliberately left NULL so the retry backoff window doesn't kick in —
+// the cancellation was our fault, not the job's, so the next claim should
+// be immediately eligible.
+//
+// Evidence from 2026-04-11: the prior behaviour — treating graceful
+// shutdowns like failures — permanently failed two transcribes during
+// `make reinstall-daemons` that were at attempt 2/2 when the worker was
+// stopped. Those jobs had done nothing wrong; they were just in flight
+// when the user cycled the daemon.
+func (db *DB) MarkJobPendingCanceled(id int64, errMsg string) error {
+	_, err := db.conn.Exec(`
+		UPDATE jobs
+		SET status = 'pending',
+		    attempt = CASE WHEN attempt > 0 THEN attempt - 1 ELSE 0 END,
+		    finished_at = NULL,
+		    error = ?
+		WHERE id = ?`, errMsg, id)
+	return err
+}
+
 // ResetStuckJobs finds jobs in 'running' state (orphaned from a crashed worker)
 // and moves them back to 'pending' so they can be retried on worker restart.
 // Returns the number of jobs reset.

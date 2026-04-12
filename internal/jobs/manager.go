@@ -162,8 +162,13 @@ func (m *Manager) drainPending(ctx context.Context, out chan<- store.Job) {
 		select {
 		case out <- *job:
 		case <-ctx.Done():
-			// Roll back the claim so this job gets picked up by a future worker
-			if rbErr := m.db.MarkJobPendingRetry(job.ID, "dispatcher canceled"); rbErr != nil {
+			// The job was claimed (attempt was incremented atomically with
+			// status=running) but never made it to a worker, so the claim
+			// wasn't a real attempt and shouldn't count against the retry
+			// budget. MarkJobPendingCanceled undoes the attempt increment
+			// and leaves finished_at NULL so the next claim is immediately
+			// eligible without waiting on backoff.
+			if rbErr := m.db.MarkJobPendingCanceled(job.ID, "dispatcher canceled"); rbErr != nil {
 				slog.Error("rolling back claimed job", "id", job.ID, "error", rbErr)
 			}
 			return
@@ -217,6 +222,33 @@ func (m *Manager) executeJob(ctx context.Context, workerID int, job store.Job) {
 			"duration", elapsed)
 		if dbErr := m.db.MarkJobComplete(job.ID); dbErr != nil {
 			slog.Error("marking job complete", "job", job.ID, "error", dbErr)
+		}
+		return
+	}
+
+	// Graceful shutdown detection. If the worker's own context was
+	// cancelled (not the handler's internal deadline), the handler error
+	// is a *consequence* of the shutdown, not the job's fault. Roll the
+	// job back to pending without counting an attempt, so after the
+	// daemon restarts it gets a fair retry.
+	//
+	// We deliberately check ctx.Err() directly rather than
+	// errors.Is(err, context.Canceled), because handlers commonly wrap
+	// the context cancellation inside their own error chain
+	// (e.g. "whisper.cpp failed: signal: killed") where the type
+	// information is lost. The worker's ctx state is the ground truth:
+	// if it's done, shutdown is happening; if it's not, the deadline
+	// came from somewhere inside the handler (e.g. the 60-minute
+	// transcribe cap), which IS a real failure that should count.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		slog.Warn("job interrupted by shutdown, not counting as attempt",
+			"worker", workerID,
+			"job", job.ID,
+			"type", job.Type,
+			"attempt", job.Attempt,
+			"error", err)
+		if dbErr := m.db.MarkJobPendingCanceled(job.ID, "shutdown: "+ctxErr.Error()); dbErr != nil {
+			slog.Error("marking job pending after shutdown", "job", job.ID, "error", dbErr)
 		}
 		return
 	}

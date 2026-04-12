@@ -389,6 +389,93 @@ func TestManager_HandlerSeesContextCancellation(t *testing.T) {
 	<-mgrDone
 }
 
+// TestManager_ShutdownDoesNotBurnRetryAttempt reproduces the 2026-04-11
+// production bug: two transcribe jobs were permanently marked failed
+// during `make reinstall-daemons` because the handler error (a wrapped
+// "signal: killed" from the subprocess getting SIGKILLed on shutdown)
+// counted against the retry budget. The fix routes graceful-shutdown
+// failures through MarkJobPendingCanceled, which decrements the attempt
+// counter before returning the job to pending.
+//
+// Scenario: a job that's already on its last attempt (attempt 2 of
+// MaxRetries 2) gets interrupted by a daemon restart. Before the fix,
+// this marked the job permanently failed. After the fix, the job goes
+// back to pending with attempt decremented so the restarted daemon can
+// still retry it.
+//
+// Crucially, the handler returns a non-context error — simulating the
+// real-world case where subprocess death is reported as "signal: killed"
+// or similar and the context.Canceled type is lost in error wrapping.
+// The worker must detect the shutdown via ctx.Err(), not via error type.
+func TestManager_ShutdownDoesNotBurnRetryAttempt(t *testing.T) {
+	db, mgr, recID := testSetup(t)
+
+	handlerStarted := make(chan struct{})
+	mgr.Register(store.JobPrep, func(ctx context.Context, job store.Job) error {
+		close(handlerStarted)
+		<-ctx.Done()
+		// Return a wrapped error that does NOT expose context.Canceled —
+		// this mirrors what the real transcribe wrapper does when
+		// whisper-cli is SIGKILLed by the worker's own Cancel function.
+		return errors.New("transcription worker: whisper.cpp failed: signal: killed")
+	})
+
+	jobID, err := db.EnqueueJob(recID, store.JobPrep)
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	// Simulate a job that's already been retried once (attempt 1 was
+	// a real failure earlier). This puts us in the dangerous state
+	// where the next failure would normally be permanent.
+	if err := db.MarkJobPendingRetry(jobID, "prior failure"); err != nil {
+		t.Fatalf("prior retry setup: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	mgrDone := make(chan error, 1)
+	go func() { mgrDone <- mgr.Run(ctx, 1) }()
+
+	// Wait for the worker to be actively executing the handler, then
+	// simulate a graceful daemon shutdown by cancelling the ctx.
+	<-handlerStarted
+	cancel()
+
+	select {
+	case <-mgrDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("manager did not shut down within 5s after cancel")
+	}
+
+	// The job must NOT be terminal failed.
+	jobs, err := db.ListRecentJobs(10)
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	var found *store.Job
+	for i := range jobs {
+		if jobs[i].ID == jobID {
+			found = &jobs[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("job %d not found in recent list", jobID)
+	}
+	if found.Status == store.StatusFailed {
+		t.Errorf("job was permanently failed by shutdown — the bug is back. attempt=%d, error=%q", found.Attempt, found.Error)
+	}
+	if found.Status != store.StatusPending {
+		t.Errorf("expected job back in pending, got status=%s attempt=%d", found.Status, found.Attempt)
+	}
+	// Attempt should be decremented back to 0 (the prior MarkJobPendingRetry
+	// left it at 0, the claim incremented to 1, and MarkJobPendingCanceled
+	// decrements back to 0). If the attempt is 1, we forgot to decrement.
+	if found.Attempt != 0 {
+		t.Errorf("attempt = %d, want 0 (shutdown should not count as a real attempt)", found.Attempt)
+	}
+}
+
 // ---- Configuration errors ----
 
 func TestManager_RunErrorsIfNoHandlers(t *testing.T) {
