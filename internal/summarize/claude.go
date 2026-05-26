@@ -217,6 +217,13 @@ func buildClaudePrompt(input SummarizeInput, density SpeechDensity) string {
 		fmt.Fprintf(&b, "- Speech density: %s\n", density.Description)
 	}
 
+	if input.Context != "" {
+		b.WriteString("\n## User-Provided Context\n")
+		b.WriteString("The archivist provided the following context about this recording. Use it to inform your analysis, classification, entity extraction, and summary:\n\n")
+		b.WriteString(input.Context)
+		b.WriteString("\n")
+	}
+
 	b.WriteString("\n## Recording Type Taxonomy\n")
 	b.WriteString("Classify into exactly one of:\n")
 	b.WriteString(typeTaxonomy)

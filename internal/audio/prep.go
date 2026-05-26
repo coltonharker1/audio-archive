@@ -13,8 +13,19 @@ import (
 //     chain). This is the Whisper-preferred format AND it drops the data rate
 //     by ~6x for typical 48 kHz 24-bit stereo tape digitizations, making
 //     every subsequent filter proportionally faster.
-//  2. High-pass filter at 80 Hz — removes tape rumble and hum.
-//  3. Loudnorm (single-pass, EBU R128 target -16 LUFS) — normalizes level.
+//  2. Notch filters at 60/120/180/240 Hz — removes electrical hum and
+//     harmonics common on old tape recordings. Narrow Q=5 bandreject filters
+//     are surgical enough to leave speech fundamentals intact.
+//  3. High-pass filter at 80 Hz — removes tape rumble below the hum range.
+//  4. FFT denoiser (afftdn nf=-25) — removes stationary noise like tape hiss.
+//     The noise floor of -25 dB is conservative enough to avoid speech
+//     artifacts while still cleaning up the high-frequency hiss that confuses
+//     Whisper's attention mechanism.
+//  5. Compressor — evens out the large dynamic range swings common on old
+//     tape recordings so Whisper gets consistent input levels across quiet
+//     and loud passages.
+//  6. Loudnorm (single-pass, EBU R128 target -16 LUFS) — final level
+//     normalization.
 //
 // Notes on what we intentionally DO NOT do:
 //
@@ -36,7 +47,13 @@ func PrepareAudio(ctx context.Context, ffmpegPath, inputPath, outputPath string)
 	// Order matters: we put aformat first so the downstream filters see
 	// the smaller data stream.
 	filterChain := "aformat=sample_rates=16000:channel_layouts=mono," +
+		"bandreject=f=60:width_type=q:w=5," +
+		"bandreject=f=120:width_type=q:w=5," +
+		"bandreject=f=180:width_type=q:w=5," +
+		"bandreject=f=240:width_type=q:w=5," +
 		"highpass=f=80," +
+		"afftdn=nf=-25," +
+		"acompressor=threshold=-20dB:ratio=3:attack=5:release=50:makeup=2," +
 		"loudnorm=I=-16:TP=-1.5:LRA=11"
 
 	args := []string{

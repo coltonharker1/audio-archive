@@ -66,6 +66,7 @@ type Job struct {
 	Attempt     int
 	MaxRetries  int
 	Error       string
+	Model       string // optional override for transcribe jobs ("base", "small", "medium", etc.); empty = use config default
 	CreatedAt   time.Time
 	StartedAt   *time.Time
 	FinishedAt  *time.Time
@@ -76,15 +77,22 @@ var ErrNoJob = errors.New("no pending jobs")
 
 // EnqueueJob inserts a new pending job for the given recording.
 func (db *DB) EnqueueJob(recordingID int64, jobType JobType) (int64, error) {
+	return db.EnqueueJobWithModel(recordingID, jobType, "")
+}
+
+// EnqueueJobWithModel inserts a new pending job with an optional model
+// override (e.g. "base", "small", "medium"). Empty model means use the
+// config default. Only meaningful for transcribe jobs.
+func (db *DB) EnqueueJobWithModel(recordingID int64, jobType JobType, model string) (int64, error) {
 	maxRetries, ok := defaultMaxRetries[jobType]
 	if !ok {
 		maxRetries = 3
 	}
 
 	res, err := db.conn.Exec(`
-		INSERT INTO jobs (recording_id, type, status, max_retries)
-		VALUES (?, ?, 'pending', ?)`,
-		recordingID, string(jobType), maxRetries,
+		INSERT INTO jobs (recording_id, type, status, max_retries, model)
+		VALUES (?, ?, 'pending', ?, NULLIF(?, ''))`,
+		recordingID, string(jobType), maxRetries, model,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("enqueuing job: %w", err)
@@ -122,6 +130,10 @@ func (db *DB) ClaimNextPendingJob() (*Job, error) {
 	// stage (prep), OR a completed predecessor exists for the same recording.
 	// Encoded as a CASE expression in the subquery WHERE clause because the
 	// predecessor type depends on the candidate job's type.
+	// Transcribe concurrency cap: only one transcribe runs at a time.
+	// whisper.cpp pins the GPU and uses substantial memory; running multiple
+	// in parallel triggers OOM kills under load (Apr 2026 batch incident).
+	// Prep (FFmpeg, CPU) and summarize (Claude HTTP) can still overlap freely.
 	query := fmt.Sprintf(`
 		UPDATE jobs
 		SET status = 'running',
@@ -143,11 +155,18 @@ func (db *DB) ClaimNextPendingJob() (*Job, error) {
 			                           END
 			       )
 			  )
+			  AND (
+			       j.type != 'transcribe'
+			       OR NOT EXISTS (
+			            SELECT 1 FROM jobs AS t
+			            WHERE t.type = 'transcribe' AND t.status = 'running'
+			       )
+			  )
 			ORDER BY j.created_at
 			LIMIT 1
 		)
 		RETURNING id, recording_id, type, status, attempt, max_retries,
-		          COALESCE(error, ''), created_at
+		          COALESCE(error, ''), COALESCE(model, ''), created_at
 	`, db.backoffSecondsPerAttempt)
 
 	row := db.conn.QueryRow(query)
@@ -157,7 +176,7 @@ func (db *DB) ClaimNextPendingJob() (*Job, error) {
 
 	err := row.Scan(
 		&j.ID, &j.RecordingID, &jobType, &status,
-		&j.Attempt, &j.MaxRetries, &j.Error, &createdAt,
+		&j.Attempt, &j.MaxRetries, &j.Error, &j.Model, &createdAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, ErrNoJob
@@ -351,7 +370,7 @@ func (db *DB) CountJobs() (JobCounts, error) {
 func (db *DB) ListRecentJobs(limit int) ([]Job, error) {
 	rows, err := db.conn.Query(`
 		SELECT id, recording_id, type, status, attempt, max_retries,
-		       COALESCE(error, ''), created_at,
+		       COALESCE(error, ''), COALESCE(model, ''), created_at,
 		       COALESCE(started_at, ''), COALESCE(finished_at, '')
 		FROM jobs
 		ORDER BY id DESC
@@ -367,7 +386,7 @@ func (db *DB) ListRecentJobs(limit int) ([]Job, error) {
 		var jobType, status, createdAt, startedAt, finishedAt string
 
 		if err := rows.Scan(&j.ID, &j.RecordingID, &jobType, &status,
-			&j.Attempt, &j.MaxRetries, &j.Error,
+			&j.Attempt, &j.MaxRetries, &j.Error, &j.Model,
 			&createdAt, &startedAt, &finishedAt); err != nil {
 			return nil, err
 		}

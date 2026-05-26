@@ -78,12 +78,16 @@ func SummarizeRecording(ctx context.Context, cfg config.Config, db *store.DB, re
 		summarizer = summarize.NewEngine(cfg.OllamaModel)
 	}
 
+	// Load user-provided context if available.
+	recordingContext, _ := db.GetContext(recordingID)
+
 	result, err := summarizer.Summarize(sumCtx, summarize.SummarizeInput{
 		Transcript: tx.FullText,
 		DurationMs: rec.DurationMs,
 		Title:      rec.Title,
 		SourceName: filepath.Base(rec.MasterPath),
 		DebugDir:   debugDir,
+		Context:    recordingContext,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("summarization engine: %w", err)

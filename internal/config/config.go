@@ -70,6 +70,12 @@ func (c Config) ModelsDir() string {
 	return filepath.Join(c.DataDir, "models")
 }
 
+// OutboxDir returns the path to the outbox directory where completed
+// recordings are staged with their transcripts and summaries for review.
+func (c Config) OutboxDir() string {
+	return filepath.Join(c.DataDir, "outbox")
+}
+
 // EnsureDirs creates all required data directories.
 func (c Config) EnsureDirs() error {
 	dirs := []string{
@@ -79,6 +85,7 @@ func (c Config) EnsureDirs() error {
 		c.TranscriptsDir(),
 		c.MetadataDir(),
 		c.ModelsDir(),
+		c.OutboxDir(),
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0755); err != nil {

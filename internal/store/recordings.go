@@ -87,6 +87,44 @@ func (db *DB) UpdateRecordingMetadata(id int64, title, speaker, date string) err
 	return err
 }
 
+// SetContext stores user-provided context for a recording (from context.txt).
+func (db *DB) SetContext(id int64, context string) error {
+	_, err := db.conn.Exec(`UPDATE recordings SET context = ? WHERE id = ?`, context, id)
+	return err
+}
+
+// GetContext returns the user-provided context, or empty if not set.
+func (db *DB) GetContext(id int64) (string, error) {
+	var c *string
+	err := db.conn.QueryRow(`SELECT context FROM recordings WHERE id = ?`, id).Scan(&c)
+	if err != nil {
+		return "", err
+	}
+	if c == nil {
+		return "", nil
+	}
+	return *c, nil
+}
+
+// SetSourcePath records the original inbox file path for a recording.
+func (db *DB) SetSourcePath(id int64, sourcePath string) error {
+	_, err := db.conn.Exec(`UPDATE recordings SET source_path = ? WHERE id = ?`, sourcePath, id)
+	return err
+}
+
+// GetSourcePath returns the original inbox path, or empty if not set.
+func (db *DB) GetSourcePath(id int64) (string, error) {
+	var sp *string
+	err := db.conn.QueryRow(`SELECT source_path FROM recordings WHERE id = ?`, id).Scan(&sp)
+	if err != nil {
+		return "", err
+	}
+	if sp == nil {
+		return "", nil
+	}
+	return *sp, nil
+}
+
 // GetRecordingIDByMasterPath looks up a recording ID by its relative master path.
 // Returns sql.ErrNoRows if not found.
 func (db *DB) GetRecordingIDByMasterPath(masterPath string) (int64, error) {

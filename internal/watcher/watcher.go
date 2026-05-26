@@ -58,14 +58,28 @@ type Watcher struct {
 	// pending tracks files that have been seen but are not yet stable enough
 	// to ingest. The map key is the absolute file path.
 	//
+	// pendingFolders tracks directories dropped into the inbox. All audio
+	// files inside a folder are ingested as a group (same group_id in DB).
+	// The folder name becomes the group title.
+	//
 	// processed tracks files the watcher has already ingested (or skipped as
 	// duplicates). On subsequent sweeps we don't re-track these — otherwise
 	// every sweep would re-discover already-archived files and produce log
 	// noise. This set is in-memory only and resets on watcher restart; that's
 	// fine because pipeline.IngestFile is idempotent anyway.
-	mu        sync.Mutex
-	pending   map[string]*pendingFile
-	processed map[string]bool
+	mu             sync.Mutex
+	pending        map[string]*pendingFile
+	pendingFolders map[string]*pendingFolder
+	processed      map[string]bool
+}
+
+// pendingFolder represents a directory dropped in the inbox whose audio
+// files will be ingested as a group.
+type pendingFolder struct {
+	path      string
+	fileCount int
+	sizeSince time.Time // when the folder's contents last changed
+	firstSeen time.Time
 }
 
 // pendingFile represents a file that the watcher has noticed but not yet
@@ -113,12 +127,13 @@ func New(cfg config.Config, db *store.DB, opts Options) (*Watcher, error) {
 	}
 
 	return &Watcher{
-		opts:      opts,
-		cfg:       cfg,
-		db:        db,
-		fs:        fs,
-		pending:   make(map[string]*pendingFile),
-		processed: make(map[string]bool),
+		opts:           opts,
+		cfg:            cfg,
+		db:             db,
+		fs:             fs,
+		pending:        make(map[string]*pendingFile),
+		pendingFolders: make(map[string]*pendingFolder),
+		processed:      make(map[string]bool),
 	}, nil
 }
 
@@ -213,14 +228,17 @@ func (w *Watcher) sweep() {
 	}
 
 	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
 		name := entry.Name()
 		if isHiddenOrTemp(name) {
 			continue
 		}
 		path := filepath.Join(w.opts.Dir, name)
+
+		if entry.IsDir() {
+			w.trackFolder(path)
+			continue
+		}
+
 		if !isAudioFile(path) {
 			continue
 		}
@@ -319,6 +337,9 @@ func (w *Watcher) checkPending() {
 	for _, path := range ready {
 		w.processFile(path)
 	}
+
+	// Also check pending folders
+	w.checkPendingFolders()
 }
 
 // processFile ingests a single file via the pipeline package and, if
@@ -347,6 +368,20 @@ func (w *Watcher) processFile(path string) {
 	w.mu.Lock()
 	w.processed[path] = true
 	w.mu.Unlock()
+
+	// Save the original inbox path so we can move it after processing
+	if err := w.db.SetSourcePath(result.RecordingID, path); err != nil {
+		slog.Warn("failed to set source path", "recording_id", result.RecordingID, "error", err)
+	}
+
+	// Check for a context.txt alongside the file
+	if ctx := readContextFile(filepath.Dir(path), filepath.Base(path)); ctx != "" {
+		if err := w.db.SetContext(result.RecordingID, ctx); err != nil {
+			slog.Warn("failed to set context", "recording_id", result.RecordingID, "error", err)
+		} else {
+			slog.Info("loaded context", "recording_id", result.RecordingID, "length", len(ctx))
+		}
+	}
 
 	if result.Skipped {
 		slog.Info("skipped — already in archive",
@@ -379,6 +414,236 @@ func (w *Watcher) processFile(path string) {
 	}
 }
 
+// trackFolder adds or updates a directory in the pending folders map.
+// The folder is considered "stable" when its audio file count stops changing.
+func (w *Watcher) trackFolder(path string) {
+	audioFiles := countAudioFiles(path)
+	if audioFiles == 0 {
+		return
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.processed[path] {
+		return
+	}
+
+	now := time.Now()
+	existing, found := w.pendingFolders[path]
+
+	if !found {
+		w.pendingFolders[path] = &pendingFolder{
+			path:      path,
+			fileCount: audioFiles,
+			sizeSince: now,
+			firstSeen: now,
+		}
+		slog.Info("tracking new folder",
+			"folder", filepath.Base(path),
+			"audio_files", audioFiles)
+		return
+	}
+
+	if existing.fileCount != audioFiles {
+		existing.fileCount = audioFiles
+		existing.sizeSince = now
+	}
+}
+
+// checkPendingFolders is called from checkPending to also process stable folders.
+func (w *Watcher) checkPendingFolders() {
+	w.mu.Lock()
+	var ready []string
+	now := time.Now()
+
+	for path, pf := range w.pendingFolders {
+		if now.Sub(pf.sizeSince) < w.opts.StableDelay {
+			continue
+		}
+
+		// Re-count before declaring stable
+		audioFiles := countAudioFiles(path)
+		if audioFiles == 0 {
+			delete(w.pendingFolders, path)
+			continue
+		}
+		if audioFiles != pf.fileCount {
+			pf.fileCount = audioFiles
+			pf.sizeSince = now
+			continue
+		}
+
+		// Also check that each file inside is individually stable (not mid-copy)
+		allStable := true
+		entries, _ := os.ReadDir(path)
+		for _, entry := range entries {
+			if entry.IsDir() || !isAudioFile(entry.Name()) {
+				continue
+			}
+			fp := filepath.Join(path, entry.Name())
+			info, err := os.Stat(fp)
+			if err != nil || info.Size() == 0 {
+				allStable = false
+				break
+			}
+		}
+		if !allStable {
+			pf.sizeSince = now
+			continue
+		}
+
+		ready = append(ready, path)
+		delete(w.pendingFolders, path)
+	}
+	w.mu.Unlock()
+
+	for _, path := range ready {
+		w.processFolder(path)
+	}
+}
+
+// processFolder ingests all audio files in a directory as a group.
+// All recordings get the same group_id, with the folder name as group_title.
+func (w *Watcher) processFolder(path string) {
+	folderName := filepath.Base(path)
+	slog.Info("processing folder as group", "folder", folderName)
+
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		slog.Error("reading folder failed", "folder", folderName, "error", err)
+		return
+	}
+
+	// Collect audio files, sorted by name
+	var audioFiles []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if isHiddenOrTemp(entry.Name()) {
+			continue
+		}
+		fp := filepath.Join(path, entry.Name())
+		if isAudioFile(fp) {
+			audioFiles = append(audioFiles, fp)
+		}
+	}
+
+	if len(audioFiles) == 0 {
+		return
+	}
+
+	groupID := store.NewGroupID()
+	folderContext := readContextFileFromDir(path)
+
+	slog.Info("assigning group",
+		"folder", folderName,
+		"group_id", groupID,
+		"files", len(audioFiles),
+		"has_context", folderContext != "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute*time.Duration(len(audioFiles)))
+	defer cancel()
+
+	for _, file := range audioFiles {
+		result, err := pipeline.IngestFile(ctx, w.cfg, w.db, pipeline.IngestOptions{
+			SourcePath: file,
+			Speaker:    w.opts.DefaultSpeaker,
+		})
+		if err != nil {
+			slog.Error("ingest failed", "file", filepath.Base(file), "error", err)
+			continue
+		}
+
+		// Save original path, assign group, and set context
+		if err := w.db.SetSourcePath(result.RecordingID, file); err != nil {
+			slog.Warn("failed to set source path", "recording_id", result.RecordingID, "error", err)
+		}
+		if err := w.db.SetGroup(result.RecordingID, groupID, folderName); err != nil {
+			slog.Error("set group failed", "recording_id", result.RecordingID, "error", err)
+		}
+		if folderContext != "" {
+			if err := w.db.SetContext(result.RecordingID, folderContext); err != nil {
+				slog.Warn("failed to set context", "recording_id", result.RecordingID, "error", err)
+			}
+		}
+
+		if result.Skipped {
+			slog.Info("skipped — already in archive",
+				"file", filepath.Base(file),
+				"recording_id", result.RecordingID)
+			continue
+		}
+
+		slog.Info("ingested into group",
+			"file", filepath.Base(file),
+			"recording_id", result.RecordingID,
+			"group", folderName)
+
+		if w.opts.EnqueueJobs {
+			for _, jt := range []store.JobType{store.JobPrep, store.JobTranscribe, store.JobSummarize} {
+				if _, err := w.db.EnqueueJob(result.RecordingID, jt); err != nil {
+					slog.Error("enqueue failed",
+						"recording_id", result.RecordingID,
+						"type", jt,
+						"error", err)
+				}
+			}
+		}
+	}
+
+	w.mu.Lock()
+	w.processed[path] = true
+	w.mu.Unlock()
+
+	slog.Info("folder group complete",
+		"folder", folderName,
+		"group_id", groupID,
+		"recordings", len(audioFiles))
+}
+
+// readContextFile looks for context associated with an audio file.
+// Checks for: <basename>.context.txt, then context.txt in the same dir.
+func readContextFile(dir, filename string) string {
+	base := strings.TrimSuffix(filename, filepath.Ext(filename))
+	specific := filepath.Join(dir, base+".context.txt")
+	if data, err := os.ReadFile(specific); err == nil {
+		return strings.TrimSpace(string(data))
+	}
+
+	general := filepath.Join(dir, "context.txt")
+	if data, err := os.ReadFile(general); err == nil {
+		return strings.TrimSpace(string(data))
+	}
+
+	return ""
+}
+
+// readContextFileFromDir reads context.txt from inside a folder.
+func readContextFileFromDir(dir string) string {
+	data, err := os.ReadFile(filepath.Join(dir, "context.txt"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// countAudioFiles returns the number of audio files in a directory (non-recursive).
+func countAudioFiles(dir string) int {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, e := range entries {
+		if !e.IsDir() && !isHiddenOrTemp(e.Name()) && isAudioFile(e.Name()) {
+			count++
+		}
+	}
+	return count
+}
+
 // ---- File filtering ----
 
 // audioExts lists extensions we treat as audio files. Case-insensitive.
@@ -408,6 +673,11 @@ func isHiddenOrTemp(path string) bool {
 	}
 	// Common in-progress transfer suffixes (e.g., rsync, Finder copy-in-place)
 	if strings.HasSuffix(base, ".part") || strings.HasSuffix(base, ".crdownload") {
+		return true
+	}
+	// The processed/ subdirectory is where we move completed inbox files.
+	// It must not be treated as a group folder for ingest.
+	if strings.EqualFold(base, "processed") {
 		return true
 	}
 	return false

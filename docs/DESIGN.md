@@ -26,7 +26,525 @@
 > in a fresh session.** It captures where things stand as of the most recent
 > work so you don't have to reconstruct context from git log alone.
 
-**Last updated:** 2026-04-12 (end of session).
+**Last updated:** 2026-04-16 (end of session).
+
+### Session of 2026-04-16 (web review app + per-recording model + prep chain + DB cleanup)
+
+**Major theme:** Shifted the review workflow from outbox folders to a
+proper web app, added per-recording transcribe model overrides with a
+historical-data–driven time estimator, swept the DB of pre-sync debris,
+and tested prep-chain improvements (net neutral). Everything is still
+uncommitted across both repos — same as the end of the prior session.
+
+#### 1. Next.js web app at `web/` (shipped)
+
+A full review UI lives at `audio-archive/web/`. Monorepo — the app reads
+the same SQLite DB directly and POSTs to its own API to drive the Go
+pipeline. Runs at `localhost:3001` (port 3000 has a Tailwind conflict
+with another project on this machine).
+
+Stack: Next.js 16 (App Router, Turbopack), TypeScript, Tailwind v4,
+`better-sqlite3`. No auth — local-only by design.
+
+Pages:
+- `/` — recordings table. Shows title, speaker, duration, date, status
+  (Local → Approved → Synced).
+- `/recordings/[id]` — detail page with:
+  - Audio player + **click-to-seek transcript** with per-segment highlight
+    as audio plays. Segments come from `transcripts.segments` (JSON).
+  - **Edit mode** for the transcript — textarea with Save/Cancel. Edits
+    update `transcripts.full_text` and preserve segments. (Segment
+    timestamps become approximate after edits; a re-transcribe regenerates
+    them from scratch.)
+  - **Actions panel** — Re-prep / Re-transcribe / Re-summarize / Re-process
+    all buttons. Model selector dropdown (base/small/medium/large-v3) for
+    transcribe. Live time estimate next to the dropdown.
+  - **Context editor** — textarea for `recordings.context` with "Save"
+    and "Save & re-summarize" buttons. Same field the Go watcher
+    populates from `context.txt` files.
+  - **Approval toggle** at the top-right of the title. Sets
+    `recordings.approved_at`. Surfaces as a blue "Approved" badge on the
+    home table.
+  - Jobs list shows model badges when present (e.g. "medium" pill).
+  - Group members list when applicable.
+- `/search?q=…` — covers transcripts (FTS5 snippets), recording titles,
+  speakers, and summary metadata (tags/topics/people/places). Results
+  show a source badge indicating which field matched.
+
+Layout:
+- Header has **live status bar** polling `/api/status` every 3s. Green
+  "idle" when nothing running, animated yellow "N running, M pending"
+  when active. Complete/failed counts visible at all times.
+- Nav: Recordings | Search.
+
+API surface:
+- `GET  /api/recordings` / `GET /api/recordings/[id]`
+- `GET  /api/recordings/[id]/audio` — streams the prep WAV
+- `PATCH /api/recordings/[id]` — body `{context?, approved?}`
+- `POST  /api/recordings/[id]/jobs` — body `{stages, model?}`. Returns
+  enqueued job IDs + total time estimate.
+- `GET  /api/recordings/[id]/estimate?stages=…&model=…` — duration
+  breakdown per stage + total. Reads the last 20 completed transcribe
+  jobs for the given model to derive realtime factor; falls back to
+  built-in defaults (base 30x, small 20x, medium 14x, large-v3 4x).
+- `PUT  /api/transcripts/[id]` — body `{fullText, segments}`. Used by
+  transcript edit mode.
+- `GET  /api/status` — pending/running/complete/failed counts.
+
+SQLite connection: one shared writable connection (`getDb` / `getWriteDb`
+both return it). An earlier readonly connection hit `SQLITE_CORRUPT_VTAB`
+snippet failures under concurrent WAL writes from the worker — the
+shared writable connection fixed it. The app only runs locally and
+there's only one reviewer, so there's no real concurrency concern to
+protect against.
+
+#### 2. Per-recording model override (shipped)
+
+- New column `jobs.model` (NULL = use config default; "base" | "small" |
+  "medium" | "large-v3" | etc. overrides on a per-job basis).
+- `store.EnqueueJobWithModel(recID, type, model)` alongside the existing
+  `EnqueueJob`.
+- Worker handler reads `job.Model` and swaps `cfg.WhisperCppModel` to
+  `~/.audio-archive/models/ggml-{model}.en.bin` before calling
+  `pipeline.TranscribeRecording`. No signature changes to the pipeline.
+- `ggml-medium.en.bin` (1.4 GB) downloaded to `~/.audio-archive/models/`.
+  Not bundled, not checked in.
+
+**Finding on model tradeoff:** Benchmarked base vs medium on the
+E. Stanley Jones sermon (id 5) and the phone call (id 2):
+
+- **Sermon (clear single speaker on tape):** medium is a dramatic
+  upgrade. "The film sat alongside" → "The friend sat alongside",
+  "Then the train said" → "Then this friend said", "a fine, 50 girl"
+  → "a fine Christian girl". Entire passages become coherent.
+- **Phone call (compressed, multi-speaker):** medium *regresses*.
+  Lost proper names ("Carl" → "Call", "James" → "Shame"). Phone audio's
+  bandwidth limits (~300–3400 Hz) strip information that larger models
+  can't recover; their guesses happen to be worse than base's pattern
+  matches.
+
+**Decision:** base stays the default. Medium is surfaced as a
+per-recording override through the UI. The model dropdown on the detail
+page makes this a zero-friction choice per recording.
+
+#### 3. FFmpeg prep chain expanded (shipped, measurable impact = 0)
+
+Added four new filters to `internal/audio/prep.go` targeting common tape
+noise profiles:
+
+```
+aformat 16kHz mono
+  → bandreject f=60/120/180/240 Hz (de-hum, notch Q=5 each)
+  → highpass f=80
+  → afftdn nf=-25         (FFT denoiser for tape hiss)
+  → acompressor           (even out dynamic swings)
+  → loudnorm I=-16
+```
+
+Old prep ran in 44s on the 35-min sermon; new prep in 53s (~20%
+slower, negligible for a one-time op).
+
+**Finding:** transcripts produced with base+old-prep and base+new-prep
+are **byte-identical** on both the sermon and the phone call. The
+source audio in this batch is already clean enough that the new filters
+don't change what Whisper hears. Keeping the chain — the cost is trivial
+and it's genuinely useful insurance for noisier tapes we haven't
+processed yet. But don't expect a quality lift on already-clean
+digitizations.
+
+#### 4. DB migrations + `archive reprocess` CLI (shipped)
+
+- `ALTER TABLE jobs ADD COLUMN model TEXT` and
+  `ALTER TABLE recordings ADD COLUMN approved_at TEXT` added to
+  `internal/store/migrations.go`.
+- `archive reprocess [ids…]` and `archive reprocess --all` enqueue fresh
+  prep/transcribe/summarize jobs for a set of recordings. `internal/cli/reprocess.go`.
+- FTS5 UPDATE/DELETE triggers added to the migration (`transcripts_au`,
+  `transcripts_ad`) alongside the existing AFTER INSERT trigger.
+  Cause: the old insert-only trigger left stale docsize entries when
+  transcripts were replaced by re-processing, causing
+  `SQLITE_CORRUPT_VTAB` on `snippet()` calls from the web app's search.
+  The in-place fix was `INSERT INTO transcripts_fts(transcripts_fts)
+  VALUES('rebuild')` — now guarded going forward by the new triggers.
+
+#### 5. Pre-sync DB cleanup (done, still uncommitted)
+
+- **Deleted recording 8** — same MD5 as recording 6 (`63db8f13…`). A
+  duplicate ingest a day apart that the dedup logic missed because the
+  slug + date prefix differed. Removed: DB rows (recordings, jobs,
+  transcripts, summaries), master file, prep file.
+- **Added recordings 6 and 7 to the accordion group** —
+  `group_id=ec0c9af6831c3853`. They were ingested before the group was
+  set up. Now sync as part of the cohesive RA sound.
+- **Normalized accordion titles:** rec 11 got a YMA prefix; rec 13's
+  en-dash converted to em-dash; the four Christmas show parts now
+  number 1/2/3/4 sequentially instead of having duplicate titles.
+- **Group title** changed from the folder name `"accordion"` to
+  `"YMA Accordion Recordings"` — this becomes the RA sound's display
+  name on sync.
+- **Deleted 9 stale failed job rows** — historical artifacts of the
+  Apr 15 OOM cascade. All those recordings had since been retried and
+  completed successfully; the rows were purely cosmetic clutter. Queue
+  is now 158 complete, 0 failed.
+
+Final state of the accordion group: **9 tracks** (was 7 in-group + 2
+orphans), consistent titles, meaningful group name, all ready for
+`archive sync --pending`.
+
+### What is working end-to-end
+
+Same drop-and-forget flow as before, plus the web review surface:
+
+1. Drop a file (or folder) in `~/audio-inbox/`. Optional `context.txt`
+   primes the summarization prompt.
+2. Watcher ingests, enqueues prep/transcribe/summarize.
+3. Worker processes them. After summarize: source file moves to
+   `~/audio-inbox/processed/`, outbox folder written to
+   `~/.audio-archive/outbox/`.
+4. **Review in the web app at `localhost:3001`** — listen to audio,
+   click-to-seek through transcript, edit transcription mistakes, edit
+   context + re-summarize, pick a stronger model for a specific tough
+   recording, mark approved.
+5. `archive sync <id>` / `archive sync --pending` pushes approved items
+   to remanence-archive.
+
+### First thing to do next session
+
+```bash
+# 1. Commit everything. Both repos still dirty.
+cd ~/code/me/audio-archive && git status
+cd ~/code/me/remanence-archive && git status
+
+# 2. Start the web app if you want the review surface.
+cd ~/code/me/audio-archive/web && npm run dev
+# → http://localhost:3001
+
+# 3. Sync the accordion group when ready.
+cd ~/code/me/audio-archive && ./archive sync --pending
+```
+
+### Key tripwires from this session
+
+- **Web app uses port 3001, not 3000** — port 3000 has a Tailwind
+  resolution conflict with another project's pnpm-hoisted `vite`. If
+  you ever run the app on another port and see a module-resolution
+  error pointing at `~/code/worlds/worlds-ui/...`, that's the cause.
+- **FTS5 `snippet()` needs UPDATE/DELETE triggers.** Without them,
+  reprocessing silently corrupts the docsize index and every
+  snippet-producing query raises `SQLITE_CORRUPT_VTAB`. The migration
+  now installs all three triggers (AI/AU/AD). If this ever happens
+  again: `sqlite3 archive.db "INSERT INTO transcripts_fts(transcripts_fts)
+  VALUES('rebuild');"`.
+- **Medium model regresses on phone audio.** Not a bug — the model
+  can't invent bandwidth that isn't in the source. Pick base (the
+  default) for phone calls; use the UI's model dropdown to pick medium
+  for sermons.
+- **The new prep chain's impact is audio-dependent.** Don't expect it
+  to change Whisper output on already-clean digitizations. It's
+  insurance for noisy material.
+- **One shared DB connection from the web app.** Not readonly — it's
+  easier and safer than fighting WAL snapshot semantics. The pragmas
+  are set once at first open and it handles all reads and writes.
+- **Per-recording model override flows through `jobs.model`.** The
+  transcribe handler swaps `cfg.WhisperCppModel` before calling the
+  pipeline. If you add more job types that care about model, read
+  `job.Model` the same way.
+- **Deleting recordings is not a CLI command yet.** The pre-sync
+  cleanup went straight through SQL + `rm` on the master/prep files.
+  If this becomes common, add `archive rm <id>` that cascades properly
+  (jobs, transcripts, summaries, fts, master file, prep file).
+
+### Quick reference to where the new stuff lives
+
+| What | Where |
+|---|---|
+| Next.js app | `web/` |
+| Web SQLite access | `web/src/lib/db.ts` |
+| Web queries (read) | `web/src/lib/queries.ts` |
+| Web mutations (write) | `web/src/lib/mutations.ts` |
+| Duration estimator | `web/src/lib/estimate.ts` |
+| Recording detail page | `web/src/app/recordings/[id]/page.tsx` |
+| Playback + transcript | `web/src/app/recordings/[id]/components/RecordingPlayback.tsx` |
+| Context editor | `web/src/app/recordings/[id]/components/ContextEditor.tsx` |
+| Action panel | `web/src/app/recordings/[id]/components/ActionPanel.tsx` |
+| Approval toggle | `web/src/app/recordings/[id]/components/ApprovalToggle.tsx` |
+| Live status bar | `web/src/components/StatusBar.tsx` |
+| Search page | `web/src/app/search/page.tsx` |
+| Model override in worker | `internal/jobs/handlers.go` (`job.Model` swap) |
+| Reprocess command | `internal/cli/reprocess.go` |
+
+---
+
+### Session of 2026-04-12 → 2026-04-15 (remanence integration + outbox + optimization)
+
+**Major theme:** Built the upstream remanence-archive integration end-to-end,
+then iterated on workflow ergonomics based on real-world friction. Final
+state replaces auto-sync with a review-first outbox model and adds three
+concurrency/safety fixes that came directly out of failure modes we hit.
+
+**Nothing is committed yet** — both repos have unstaged changes covering
+all of the work below. First action next session is to commit and push.
+
+#### 1. Remanence-archive sync API (shipped)
+
+In `remanence-archive`:
+
+- Added `metadata` JSONB column to `sounds` table. Migration:
+  `drizzle/0001_add_metadata_column.sql`. Already run against Neon prod.
+- New API key auth helper: `src/lib/sync-auth.ts`. Reads `SYNC_API_KEY`
+  env var, validates `Authorization: Bearer <key>`. Returns 501 if not
+  configured, 401 on mismatch.
+- `GET /api/sync` reserves and returns the next catalog number (RA-XXX).
+- `POST /api/sync/upload` returns presigned R2 URLs for a batch of files
+  (audio + transcript) in one round trip.
+- `POST /api/sync` creates or updates a sound record. Lookup is by
+  `metadata.audio_archive_id` so re-syncs update rather than duplicate.
+  R2 keys in `tracks[].audioUrl/downloadUrl` get auto-resolved to public
+  URLs via `getPublicUrl()`. Transcript key in `metadata.transcript_key`
+  is resolved to `metadata.transcript_url`.
+- New records always created with `published: false` so admin reviews
+  before they appear on the public catalog.
+- `PATCH /api/sounds/[id]` accepts `metadata` so admins can edit it.
+
+In `audio-archive`:
+
+- New `internal/sync/client.go` — HTTP client. `SyncRecording` for single
+  recordings, `SyncGroup` for grouped multi-track sounds.
+- New `internal/cli/sync.go` — `archive sync <id>` and `archive sync --pending`.
+  Auto-detects group membership; if a recording is in a group, syncs the
+  whole group as one multi-track RA sound.
+- `internal/store/sync.go` — `MarkSynced`, `SyncableRecordings`, `GetRemanenceCatalogNumber`.
+- New columns on `recordings`: `synced_at`, `remanence_catalog_number`.
+
+Auth: `REMANENCE_URL` and `REMANENCE_SYNC_KEY` env vars (or `--url`/`--key` flags).
+Sync key is in `remanence-archive/.env.local`.
+
+#### 2. Grouping (folder-based + post-hoc)
+
+Recordings from the same physical tape can now be synced as one RA sound
+with multiple tracks:
+
+- New columns on `recordings`: `group_id`, `group_title`. Index on `group_id`.
+- `internal/store/groups.go` — `NewGroupID`, `SetGroup`, `GetGroupRecordings`,
+  `GetRecordingGroup`, `IsGroupFullySummarized`, `SyncableGroups`.
+- **Watcher folder detection**: a directory in the inbox is treated as a
+  group. All audio files inside get the same `group_id`, folder name
+  becomes the group title. Each file still goes through prep/transcribe/
+  summarize individually.
+- **CLI**: `archive group 2 4 5 --title "Accordion Performances"` for
+  post-hoc grouping when files were ingested individually.
+- **Sync flow**: `archive sync <id>` on a grouped recording syncs the
+  whole group. `--pending` syncs groups as units, ungrouped recordings
+  individually. Group sync merges tags, topics, quotes from all members
+  and creates one RA sound with N tracks.
+
+#### 3. Inbox lifecycle: source files move to processed/
+
+After successful summarize, the original inbox file moves to
+`~/audio-inbox/processed/`. Prevents accidental re-ingest if you clear
+and rebuild the archive.
+
+- New column on `recordings`: `source_path` (original inbox path).
+- Watcher's `processFile` and `processFolder` call `SetSourcePath` after
+  ingest.
+- Post-summarize hook in `internal/jobs/handlers.go` calls
+  `moveSourceToProcessed` — best-effort, doesn't fail the job.
+- **Tripwire**: the watcher's `isHiddenOrTemp` filter now treats `processed`
+  as a reserved folder name so it isn't picked up as a group folder.
+  See `processed/` check in `isHiddenOrTemp`.
+
+#### 4. Outbox folder (replaces auto-sync)
+
+After summarize completes, the worker writes a review folder under
+`~/.audio-archive/outbox/`:
+
+```
+outbox/
+  2026-04-15_<slug>/
+    transcript.txt
+    summary.txt          ← human-readable
+    summary.json         ← machine-readable RecordingSummary
+    <name>.prep.wav      ← symlink to prep file for listening
+
+  2026-04-15_<group-title>/    (for grouped recordings)
+    overview.txt               ← combined summary across tracks
+    track-1-transcript.txt
+    track-1-summary.{txt,json}
+    track-1-<name>.prep.wav
+    ...
+```
+
+For groups, the outbox is only written when `IsGroupFullySummarized`
+returns true — so all members are in the folder before review.
+
+**This replaced an earlier auto-sync to RA implementation.** Auto-sync was
+working (env vars in worker plist), but in practice you want to review
+summaries, add provenance, attach pamphlet scans, etc. before pushing to
+RA. The outbox gives a non-web review surface. `archive sync` is still
+the manual command to push to RA.
+
+`OutboxDir()` added to `config.Config`, included in `EnsureDirs`.
+
+#### 5. Context support — feed Claude a backstory
+
+Claude summaries can now be primed with user-provided context (e.g. the
+provenance of a tape collection). Drop a `context.txt` and the watcher
+will load it; the summarizer prepends it to the prompt under a
+"User-Provided Context" section.
+
+- `context.txt` in a folder applies to all recordings in that group.
+- `<filename>.context.txt` alongside an individual file applies just to
+  that one. `context.txt` in the same dir is the fallback.
+- New column on `recordings`: `context`.
+- `SummarizeInput.Context` field flows through to Claude prompt.
+- See `accordion-context.txt` on the desktop for the YMA example.
+
+#### 6. Three optimizations from the Apr 15 batch incident
+
+A 7-recording accordion batch failed catastrophically (3 transcribes
+OOM-killed, cascade-failed downstream summarizes). Three fixes shipped
+in response:
+
+1. **Don't enqueue jobs on skip** — `processFolder` was enqueuing
+   prep/transcribe/summarize even when `IngestFile` returned `Skipped: true`
+   (because the file was already in the archive). On watcher restart,
+   this doubled the queue. Fix: `continue` after skip log in `processFolder`.
+   `processFile` was already correct via `if !w.opts.EnqueueJobs` check
+   ordering.
+
+2. **Worker PID lock** — two `archive worker` processes running
+   simultaneously deadlock the SQLite single-writer connection. The Apr 15
+   incident lost ~30 minutes to a stale shell-launched worker contending
+   with the daemon. Fix: `acquireWorkerLock` in `internal/cli/worker.go`
+   writes `~/.audio-archive/worker.pid`, refuses to start if another
+   worker is alive (signal-0 liveness check). Stale PID files are
+   silently removed.
+
+3. **Transcribe concurrency cap = 1** — whisper.cpp pins the GPU and
+   uses substantial memory; running 3 in parallel triggered OOM kills on
+   the bigger accordion files. Fix in `ClaimNextPendingJob` SQL: a
+   transcribe job is only claimable if no other transcribe is currently
+   `running`. Prep (FFmpeg, CPU) and summarize (Claude HTTP) still run
+   freely concurrent. Worker pool size unchanged at 3.
+
+Build is clean. **Daemons must be reinstalled to load the new binary
+before next batch.**
+
+### What is working end-to-end
+
+Same drop-and-forget flow as before, plus:
+
+1. Drop a file (or folder for groups) in `~/audio-inbox/`.
+2. Optionally include `context.txt` for richer summarization.
+3. Watcher ingests, enqueues prep/transcribe/summarize.
+4. Worker processes them. After summarize:
+   - Source file moves to `~/audio-inbox/processed/`.
+   - Outbox folder written to `~/.audio-archive/outbox/<date>_<slug>/`.
+5. **Review the outbox folder.** Read summaries, listen to prep files.
+6. Run `archive sync <id>` (or `--pending`) to push to RA as draft.
+7. Edit/publish in RA admin at `localhost:3333/admin`.
+
+### Where the accordion batch stands
+
+When this session ended, 3 whisper-cli processes were still actively
+transcribing the larger accordion files from the troubled batch. The DB
+showed 9 jobs failed (3 transcribe OOMs + 6 cascaded summarizes), 43
+complete, 23 pending. The failed recordings (12, 13, 14 — three of the
+xmas show segments) need transcribe retries. After the failed batch,
+some recordings (9, 10, 11, 15) likely did get summarized successfully
+with the YMA context applied — check the outbox to see which.
+
+### First thing to do next session
+
+```bash
+# 1. Make sure no stale workers, check current state
+ps aux | grep "archive worker"
+cd ~/code/me/audio-archive
+./archive status
+
+# 2. Reinstall daemons to load the optimized binary
+make reinstall-daemons
+
+# 3. Inspect what made it through from the accordion batch
+ls -la ~/.audio-archive/outbox/
+cat ~/.audio-archive/outbox/*accordion*/summary.txt 2>/dev/null
+
+# 4. Decide: retry the failed transcribes, or wipe and re-ingest
+# To retry just the failures:
+sqlite3 ~/.audio-archive/archive.db "
+  UPDATE jobs SET status='pending', attempt=0, error=NULL, finished_at=NULL
+  WHERE recording_id IN (12,13,14) AND status='failed';
+"
+
+# To start completely clean, see the previous-session notes for the
+# clear-and-reingest sequence (rm -f archive.db, rm -rf masters/processed/
+# transcripts/metadata/, then drop folder back into ~/audio-inbox/).
+
+# 5. Commit everything
+cd ~/code/me/audio-archive && git status
+cd ~/code/me/remanence-archive && git status
+```
+
+### Known remaining work / tech debt
+
+- **No commits yet** for any work in this session. Both repos dirty.
+- **RA detail page (`/archive/[slug]`) doesn't display sync metadata.**
+  Topics, tags, speakers, bible references, quotes are sitting in
+  `metadata` JSONB but invisible to visitors. Transcript URL is in
+  metadata but no UI for it.
+- **No catalog search.** `/catalog` is a flat list with no filter.
+- **RA not deployed.** Auto-sync env vars in plist template were removed
+  when we replaced auto-sync with outbox; that's correct since sync is
+  now manual. If RA gets deployed and auto-sync is desired again later,
+  the env vars can be restored.
+- **Skip-transcribe-for-music optimization not done.** Suggested in
+  optimization roundup but not built. Would speed up music-heavy
+  recordings significantly (whisper currently transcribes every minute
+  even for accordion music with no speech).
+
+### Email drafts on the desktop
+
+For Mike Aman / YMA outreach (the accordion school whose recordings are
+in this collection):
+
+- `~/Desktop/mike-aman-email.txt` — direct email to Monarch Accordions.
+- `~/Desktop/montgomery-steward-email.txt` — to Marvin Steward's funeral
+  home (he was a YMA student/Junior Band director and these tapes came
+  from his estate; his obituary led us to identify him).
+- `~/Desktop/monarch-facebook-post.txt` — for the Friends of Monarch
+  Accordions Facebook group.
+- `~/Desktop/yma-description.txt` — full RA description with corrected
+  Pueblo, CO location and the Marvin Steward provenance.
+- `~/Desktop/accordion-context.txt` — the context.txt content used for
+  the accordion batch.
+
+### Key tripwires from this session (in addition to prior tripwires)
+
+- **`worker.pid` file at `~/.audio-archive/worker.pid`** — if a worker
+  exits ungracefully (kill -9, machine crash) the file is stale. Liveness
+  check is signal-0. If you ever see "another worker is already running"
+  and `ps` shows nothing, just delete the file.
+- **`processed/` folder name is reserved in the inbox.** The watcher
+  ignores it as a group folder candidate. Don't name a real audio folder
+  "processed".
+- **R2 key vs URL gotcha in sync** — AA sends R2 keys (e.g.
+  `audio/ra-007-1234.wav`), RA's sync route resolves them to full public
+  URLs via `getPublicUrl`. If you change the R2 bucket or public URL
+  config in RA, both AA and RA payloads stay valid because resolution
+  happens server-side.
+- **Re-syncing overwrites RA edits.** Updates are keyed by
+  `metadata.audio_archive_id`. If you edit a sound in RA admin and then
+  re-sync from AA, the AA payload wins. Default behavior of `--pending`
+  skips already-synced recordings, so this only happens if you
+  explicitly `archive sync <id>` again.
+- **Outbox uses symlinks for prep WAVs**, not copies. If you delete the
+  prep file from `~/.audio-archive/processed/`, the outbox symlink
+  breaks. Don't archive or move the outbox without `cp -L` or similar.
+- **Folder ingest groups files non-recursively.** Only the immediate
+  contents of a top-level inbox folder are grouped. Subfolders are not
+  descended.
+
+---
 
 ### Session of 2026-04-11 / 2026-04-12 (marathon session)
 

@@ -61,6 +61,32 @@ func (db *DB) migrate() error {
 		return err
 	}
 
+	// ---- Sync tracking columns ----
+	db.conn.Exec(`ALTER TABLE recordings ADD COLUMN synced_at TEXT`)
+	db.conn.Exec(`ALTER TABLE recordings ADD COLUMN remanence_catalog_number TEXT`)
+
+	// ---- Source path and context columns ----
+	db.conn.Exec(`ALTER TABLE recordings ADD COLUMN source_path TEXT`)
+	db.conn.Exec(`ALTER TABLE recordings ADD COLUMN context TEXT`)
+
+	// ---- Grouping columns ----
+	// Recordings with the same group_id are tracks on the same tape/reel.
+	// group_id is a random string assigned at ingest time (folder-based) or
+	// via `archive group`. group_title is the display name for the group.
+	db.conn.Exec(`ALTER TABLE recordings ADD COLUMN group_id TEXT`)
+	db.conn.Exec(`ALTER TABLE recordings ADD COLUMN group_title TEXT`)
+	db.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_recordings_group_id ON recordings(group_id)`)
+
+	// ---- Per-job model override (transcribe) ----
+	// NULL means use config default. Set when the user requests a specific
+	// whisper model from the web UI (e.g. "transcribe this one with medium").
+	db.conn.Exec(`ALTER TABLE jobs ADD COLUMN model TEXT`)
+
+	// ---- Approval tracking ----
+	// approved_at is set by the reviewer in the web UI before sync. Sync
+	// commands can use this as a gate to require human review.
+	db.conn.Exec(`ALTER TABLE recordings ADD COLUMN approved_at TEXT`)
+
 	// ---- Summaries table: schema v2 migration ----
 	// v1 had sermon-specific columns (summary_short, summary_long, main_topics,
 	//      bible_references, etc.).
@@ -72,15 +98,30 @@ func (db *DB) migrate() error {
 		return err
 	}
 
-	// FTS sync trigger — CREATE TRIGGER IF NOT EXISTS isn't supported,
-	// so we drop and recreate.
+	// FTS sync triggers — CREATE TRIGGER IF NOT EXISTS isn't supported,
+	// so we drop and recreate. AFTER UPDATE/DELETE triggers keep the FTS
+	// index in sync when transcripts are re-processed (otherwise snippet()
+	// raises SQLITE_CORRUPT_VTAB on stale docsize entries).
 	db.conn.Exec("DROP TRIGGER IF EXISTS transcripts_ai")
-	_, err = db.conn.Exec(`
+	db.conn.Exec("DROP TRIGGER IF EXISTS transcripts_au")
+	db.conn.Exec("DROP TRIGGER IF EXISTS transcripts_ad")
+	if _, err := db.conn.Exec(`
 		CREATE TRIGGER transcripts_ai AFTER INSERT ON transcripts BEGIN
 			INSERT INTO transcripts_fts(rowid, full_text) VALUES (new.id, new.full_text);
 		END;
-	`)
-	return err
+		CREATE TRIGGER transcripts_au AFTER UPDATE ON transcripts BEGIN
+			INSERT INTO transcripts_fts(transcripts_fts, rowid, full_text)
+				VALUES('delete', old.id, old.full_text);
+			INSERT INTO transcripts_fts(rowid, full_text) VALUES (new.id, new.full_text);
+		END;
+		CREATE TRIGGER transcripts_ad AFTER DELETE ON transcripts BEGIN
+			INSERT INTO transcripts_fts(transcripts_fts, rowid, full_text)
+				VALUES('delete', old.id, old.full_text);
+		END;
+	`); err != nil {
+		return err
+	}
+	return nil
 }
 
 // migrateSummariesV2 ensures the summaries table is in v2 format (universal

@@ -46,6 +46,7 @@ type SummarizeInput struct {
 	Title       string // recording title (from --title flag or filename)
 	SourceName  string // original source filename for context
 	DebugDir    string // if non-empty, intermediate files are written here
+	Context     string // user-provided context from context.txt (optional)
 }
 
 // SpeechDensity describes how much of the audio is spoken content.
