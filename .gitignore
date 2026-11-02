@@ -22,3 +22,10 @@ coverage.txt
 # Local config or secrets (if added later)
 .env
 .env.local
+
+# Swift and Xcode (the project is generated from project.yml)
+*.xcodeproj/
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/

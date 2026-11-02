@@ -1,0 +1,43 @@
+# Generates Remanence.xcodeproj. Run `xcodegen` after adding or removing targets.
+name: Remanence
+options:
+  bundleIdPrefix: com.colton
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+packages:
+  RemanenceCore:
+    path: RemanenceCore
+targets:
+  Remanence:
+    type: application
+    platform: macOS
+    sources:
+      - Remanence
+    dependencies:
+      - package: RemanenceCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.colton.remanence
+        PRODUCT_NAME: Remanence
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Remanence
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.music
+        # Personal app that runs local tools, so it stays out of the sandbox.
+        CODE_SIGN_IDENTITY: "-"
+        ENABLE_HARDENED_RUNTIME: NO
+        ENABLE_APP_SANDBOX: NO
+schemes:
+  Remanence:
+    build:
+      targets:
+        Remanence: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - package: RemanenceCore/RemanenceCoreTests
