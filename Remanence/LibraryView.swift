@@ -3,6 +3,7 @@ import SwiftUI
 
 struct LibraryView: View {
     @Environment(AppModel.self) private var model
+    @State private var isDropTargeted = false
 
     var body: some View {
         @Bindable var model = model
@@ -39,6 +40,36 @@ struct LibraryView: View {
             }
             .background(Theme.paper)
         }
+        .dropDestination(for: URL.self) { urls, _ in
+            Task { await model.add(urls) }
+            return !urls.isEmpty
+        } isTargeted: { targeted in
+            isDropTargeted = targeted
+        }
+        .overlay {
+            if isDropTargeted {
+                DropOverlay()
+            }
+        }
+    }
+}
+
+private struct DropOverlay: View {
+    var body: some View {
+        ZStack {
+            Theme.paper.opacity(0.88)
+            RoundedRectangle(cornerRadius: 14)
+                .strokeBorder(Theme.accent, style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
+                .padding(18)
+            VStack(spacing: 6) {
+                Text("Drop to add to your shelf")
+                    .font(Theme.display(32))
+                    .foregroundStyle(Theme.ink)
+                Text("A folder becomes one tape, with a track for each file.")
+                    .foregroundStyle(Theme.inkMuted)
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 
@@ -50,7 +81,7 @@ private struct EmptyShelfView: View {
             Text("Your shelf is empty")
                 .font(Theme.display(38))
                 .foregroundStyle(Theme.ink)
-            Text("Import your backup to bring your tapes home.")
+            Text("Drop audio here, or import your backup to bring your tapes home.")
                 .foregroundStyle(Theme.inkMuted)
             Button("Import Backup…") { model.chooseBackupToImport() }
                 .controlSize(.large)

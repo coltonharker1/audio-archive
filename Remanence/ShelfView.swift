@@ -111,6 +111,20 @@ private struct TapeColumn: View {
     private var isSelected: Bool { model.selectedTapeID == tape.id }
     private var isLifted: Bool { isSelected || isHovering }
 
+    private var caption: String {
+        if let activity = model.activityText(for: tape) { return activity }
+        let place = tape.tape.pushedAt == nil ? "Ready to review" : "On the site"
+        return "\(place) · \(TimeLabel.clock(tape.duration))"
+    }
+
+    private var captionColor: Color {
+        switch tape.status {
+        case .failed: Theme.attention
+        case .working: Theme.accent
+        case .idle, .waiting: Theme.inkMuted
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
@@ -141,9 +155,10 @@ private struct TapeColumn: View {
                 .foregroundStyle(Theme.ink)
                 .lineLimit(2)
                 .padding(.top, 22)
-            Text(tape.tape.pushedAt == nil ? TimeLabel.clock(tape.duration) : "On the site · \(TimeLabel.clock(tape.duration))")
+            Text(caption)
                 .font(.system(size: 12))
-                .foregroundStyle(Theme.inkMuted)
+                .foregroundStyle(captionColor)
+                .lineLimit(1)
                 .padding(.top, 3)
         }
         .frame(width: width, alignment: .leading)

@@ -131,7 +131,7 @@ private final class Reported: @unchecked Sendable {
         let paths = LibraryPaths(library: directory, support: directory)
         let requirements = SetupCatalog.requirements(paths: paths)
         let required = Set(requirements.filter { !$0.isOptional }.map(\.id))
-        #expect(required == ["ffmpeg", "ffprobe", "whisper-cli", "claude", "model-base", "model-vad"])
+        #expect(required == ["ffmpeg", "ffprobe", "whisper-cli", "claude", "claude-login", "model-base", "model-vad"])
         #expect(requirements.first { $0.id == "model-medium" }?.isOptional == true)
     }
 }

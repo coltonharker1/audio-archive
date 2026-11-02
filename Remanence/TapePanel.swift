@@ -10,6 +10,7 @@ struct TapePanel: View {
             HStack(alignment: .top, spacing: 24) {
                 VStack(alignment: .leading, spacing: 10) {
                     details(for: tape)
+                    activity(for: tape)
                     transport
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -45,6 +46,23 @@ struct TapePanel: View {
                     .padding(.top, 2)
                     .textSelection(.enabled)
             }
+        }
+    }
+
+    @ViewBuilder private func activity(for tape: ShelfTape) -> some View {
+        if case .failed(let reason) = tape.status {
+            HStack(spacing: 10) {
+                Text(reason)
+                    .font(.callout)
+                    .foregroundStyle(Theme.attention)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+                Button("Try Again") { Task { await model.retry(tape) } }
+            }
+        } else if let text = model.activityText(for: tape) {
+            Text(text)
+                .font(.callout)
+                .foregroundStyle(Theme.accent)
         }
     }
 

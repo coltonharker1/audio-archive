@@ -1,9 +1,11 @@
+import AppKit
 import RemanenceCore
 import SwiftUI
 
 @main
 struct RemanenceApp: App {
-    @State private var model = AppModel()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    @State private var model = AppModel.shared
 
     var body: some Scene {
         Window("Remanence", id: "main") {
@@ -20,6 +22,58 @@ struct RemanenceApp: App {
                     .disabled(model.importProgress != nil)
             }
         }
+
+        MenuBarExtra {
+            MenuBarContent()
+                .environment(model)
+        } label: {
+            Image(systemName: model.workingTapes.isEmpty ? "recordingtape" : "recordingtape.circle.fill")
+                .accessibilityLabel("Remanence: \(model.pipelineSummary)")
+        }
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Closing the window leaves the menu bar item running, so work carries on.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    /// Audio or folders dropped on the Dock icon.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        Task { @MainActor in await AppModel.shared.add(urls) }
+    }
+
+    /// Stops tools cleanly so nothing is left running and no attempts are used up.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        Task { @MainActor in
+            await AppModel.shared.shutDown()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+}
+
+private struct MenuBarContent: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Text(model.pipelineSummary)
+        ForEach(model.workingTapes) { tape in
+            Text("\(model.activityText(for: tape) ?? "") \(tape.tape.title)")
+        }
+        Divider()
+        Button("Open Remanence") {
+            openWindow(id: "main")
+            NSApp.activate()
+        }
+        Toggle("Open at Login", isOn: Binding(
+            get: { model.opensAtLogin },
+            set: { model.setOpensAtLogin($0) }
+        ))
+        Divider()
+        Button("Quit Remanence") { NSApp.terminate(nil) }
     }
 }
 
@@ -44,8 +98,8 @@ struct RootView: View {
             }
         }
         .background(Theme.paper)
-        .task { await model.refresh() }
         .task { await model.observeShelf() }
+        .task { await model.refresh() }
         .onChange(of: scenePhase) { _, phase in
             // Pick up tools installed in Terminal while the app was in the background.
             if phase == .active { Task { await model.refresh() } }

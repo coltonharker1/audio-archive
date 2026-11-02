@@ -181,6 +181,8 @@ your confirmation at the time.
 | FTS needs update and delete triggers | `migrations.go` | Install all three from the first migration |
 | Larger model made a phone call worse | Apr 16 benchmark | Base by default on microcassette, larger on reels; always compare before replacing |
 | Dedup missed a duplicate file | Apr 16 cleanup | Identify files by content hash only |
+| A closed lid used up a job's retries | Nov 2 summary test | Time limits ignore sleep, nothing starts until fully awake, and failures across a sleep don't count |
+| Claude Code needs `USER` to find its login, and exits 0 when signed out | Nov 2 testing | Pass `USER`, check `is_error`, and check sign-in during setup |
 
 Port as-is: the prep filter chain (`internal/audio/prep.go`), summary prompts
 (`internal/summarize/prompts.go`), the recording types (`types.go`) and summary
@@ -188,8 +190,10 @@ normalization.
 
 ## Later
 
-Filtering and sorting the shelf, a label on each shelf saying what it holds, a
-list view showing everything in one place with an icon for each tape's format,
+Filtering and sorting, a label on each format's shelf saying what it holds, and
+a list view showing everything in one place with an icon for each tape's format.
+Sorting applies within each shelf in shelf view and across everything in list
+view, using one shared control. Also:
 automatic track suggestions, chapters from transcripts, box photos with
 Continuity Camera, hum and tape-speed checks, and dark mode tuning. The split test showed silence alone needs a raw transfer to tune against,
 and sorting by gap length is the likely starting point.

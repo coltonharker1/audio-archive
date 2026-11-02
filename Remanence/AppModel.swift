@@ -2,19 +2,27 @@ import AppKit
 import Foundation
 import Observation
 import RemanenceCore
+import ServiceManagement
 
 enum ShelfFilter: String, CaseIterable, Identifiable {
     case all = "Shelf"
     case review = "Ready to Review"
+    case progress = "In Progress"
     case site = "On the Site"
 
     var id: String { rawValue }
 
     func includes(_ tape: ShelfTape) -> Bool {
         switch self {
-        case .all: true
-        case .review: tape.tape.pushedAt == nil && tape.tape.approvedAt == nil
-        case .site: tape.tape.pushedAt != nil
+        case .all:
+            return true
+        case .review:
+            return tape.tape.pushedAt == nil && tape.tape.approvedAt == nil && tape.status == .idle
+        case .progress:
+            if case .failed = tape.status { return true }
+            return tape.status.isActive
+        case .site:
+            return tape.tape.pushedAt != nil
         }
     }
 }
@@ -22,6 +30,8 @@ enum ShelfFilter: String, CaseIterable, Identifiable {
 @MainActor
 @Observable
 final class AppModel {
+    static let shared = AppModel()
+
     let paths = LibraryPaths.standard
     let requirements: [Requirement]
     let player = AudioPlayer()
@@ -38,10 +48,15 @@ final class AppModel {
     private(set) var selectedTapeID: ShelfTape.ID?
     private(set) var selectedItemIndex = 0
     private(set) var importProgress: ImportProgress?
+    private(set) var jobProgress: [Int64: Double] = [:]
+    private(set) var opensAtLogin = SMAppService.mainApp.status == .enabled
     var filter = ShelfFilter.all
     var message: String?
 
-    init() {
+    @ObservationIgnored private var queue: JobQueue?
+    @ObservationIgnored private var isObservingShelf = false
+
+    private init() {
         requirements = SetupCatalog.requirements(paths: paths)
         do {
             try paths.createDirectories()
@@ -78,6 +93,7 @@ final class AppModel {
             states[requirement.id] = await SetupCatalog.check(requirement)
         }
         hasChecked = true
+        await startPipelineIfReady()
     }
 
     func download(_ requirement: Requirement) async {
@@ -103,13 +119,132 @@ final class AppModel {
         }
         downloads[requirement.id] = nil
         states[requirement.id] = await SetupCatalog.check(requirement)
+        await startPipelineIfReady()
+    }
+
+    // MARK: Pipeline
+
+    /// Starts background work once, as soon as every required tool is in place.
+    private func startPipelineIfReady() async {
+        guard isReady, queue == nil, let database else { return }
+
+        let pipeline = Pipeline(database: database, paths: paths)
+        let queue = JobQueue(
+            database: database,
+            tools: pipeline.tools,
+            onProgress: { [weak self] id, fraction in
+                Task { @MainActor in self?.jobProgress[id] = fraction }
+            },
+            handler: { job, context in try await pipeline.run(job, context: context) }
+        )
+        self.queue = queue
+        observeSystemSleep(queue)
+
+        do {
+            try await database.writer.write { db in
+                try JobStore.enqueueMissingTranscripts(db) { pipeline.hasModel($0) }
+            }
+            try await queue.start()
+        } catch {
+            message = "Background processing couldn’t start. \(error.localizedDescription)"
+        }
+    }
+
+    private func observeSystemSleep(_ queue: JobQueue) {
+        let center = NSWorkspace.shared.notificationCenter
+        center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: nil) { _ in
+            Task { await queue.systemWillSleep() }
+        }
+        center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: nil) { _ in
+            Task { await queue.systemDidWake() }
+        }
+    }
+
+    /// Stops running tools and returns their jobs to the queue, ready for next launch.
+    func shutDown() async {
+        await queue?.stop()
+    }
+
+    func retry(_ tape: ShelfTape) async {
+        guard let database else { return }
+        let id = tape.id
+        do {
+            try await database.writer.write { db in try JobStore.retry(db, tapeID: id) }
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    /// Plain words for what's happening with a tape, or nil when it's settled.
+    func activityText(for tape: ShelfTape) -> String? {
+        switch tape.status {
+        case .idle:
+            return nil
+        case .waiting:
+            return "Waiting to start"
+        case .failed:
+            return "Couldn’t finish"
+        case .working(.prep, _):
+            return "Getting ready…"
+        case .working(.summarize, _):
+            return "Writing a summary…"
+        case .working(.transcribe, let jobID):
+            if let fraction = jobProgress[jobID], fraction > 0 {
+                return "Listening… \(Int(fraction * 100))%"
+            }
+            return "Listening…"
+        }
+    }
+
+    /// A one-line summary for the menu bar.
+    var pipelineSummary: String {
+        let working = shelf.filter {
+            if case .working = $0.status { return true }
+            return false
+        }
+        let waiting = shelf.filter { $0.status == .waiting }.count
+        let failed = shelf.filter {
+            if case .failed = $0.status { return true }
+            return false
+        }.count
+
+        var parts: [String] = []
+        if !working.isEmpty {
+            parts.append(working.count == 1 ? "1 tape in progress" : "\(working.count) tapes in progress")
+        }
+        if waiting > 0 { parts.append("\(waiting) waiting") }
+        if failed > 0 { parts.append("\(failed) couldn’t finish") }
+        return parts.isEmpty ? "All caught up" : parts.joined(separator: " · ")
+    }
+
+    var workingTapes: [ShelfTape] {
+        shelf.filter {
+            if case .working = $0.status { return true }
+            return false
+        }
+    }
+
+    // MARK: Open at login
+
+    func setOpensAtLogin(_ enabled: Bool) {
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            message = "This couldn’t be changed. \(error.localizedDescription)"
+        }
+        opensAtLogin = SMAppService.mainApp.status == .enabled
     }
 
     // MARK: Shelf
 
     /// Keeps the shelf matching the database for as long as the app runs.
     func observeShelf() async {
-        guard let library else { return }
+        guard let library, !isObservingShelf else { return }
+        isObservingShelf = true
         do {
             for try await tapes in library.shelfUpdates() {
                 shelf = tapes
@@ -122,6 +257,7 @@ final class AppModel {
         } catch {
             message = "Your shelf couldn’t be loaded. \(error.localizedDescription)"
         }
+        isObservingShelf = false
     }
 
     func select(_ tape: ShelfTape) {
@@ -169,7 +305,27 @@ final class AppModel {
         }
     }
 
-    // MARK: Import
+    // MARK: Adding audio
+
+    /// Adds dropped files and folders, reporting only what needs attention.
+    func add(_ urls: [URL]) async {
+        guard let database else { return }
+        let pipeline = Pipeline(database: database, paths: paths)
+        let importer = DropImporter(database: database, paths: paths) { pipeline.hasModel($0) }
+
+        let task = Task.detached(priority: .userInitiated) { await importer.add(urls) }
+        let summary = await task.value
+
+        var notes: [String] = []
+        if !summary.alreadyInLibrary.isEmpty {
+            notes.append("Already on your shelf: \(summary.alreadyInLibrary.joined(separator: ", ")).")
+        }
+        if !summary.notAudio.isEmpty {
+            notes.append("Not audio Remanence can read: \(summary.notAudio.joined(separator: ", ")).")
+        }
+        notes += summary.failed
+        if !notes.isEmpty { message = notes.joined(separator: "\n\n") }
+    }
 
     func chooseBackupToImport() {
         let panel = NSOpenPanel()
@@ -199,6 +355,11 @@ final class AppModel {
             let summary = try await task.value
             if summary.imported.isEmpty {
                 message = "Everything in this backup is already on your shelf."
+            } else {
+                let pipeline = Pipeline(database: database, paths: paths)
+                try await database.writer.write { db in
+                    try JobStore.enqueueMissingTranscripts(db) { pipeline.hasModel($0) }
+                }
             }
         } catch {
             message = "The import stopped. \(error.localizedDescription) Nothing was changed in your backup."

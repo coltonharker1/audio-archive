@@ -15,6 +15,20 @@ public struct Requirement: Identifiable, Sendable {
     public let path: URL
     public let isOptional: Bool
     public let kind: Kind
+    /// Shown instead of the exit status when a tool runs but reports a problem.
+    public var failureMessage: String?
+}
+
+/// What every tool runs with. A GUI app doesn't get the shell's environment, and
+/// Claude Code reports "Not logged in" without USER, so this is set explicitly.
+public enum ToolEnvironment {
+    public static var standard: [String: String] {
+        [
+            "HOME": FileManager.default.homeDirectoryForCurrentUser.path,
+            "USER": NSUserName(),
+            "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        ]
+    }
 }
 
 public enum RequirementState: Equatable, Sendable {
@@ -65,6 +79,15 @@ public enum SetupCatalog {
                     arguments: ["--version"],
                     installCommand: "curl -fsSL https://claude.ai/install.sh | bash"
                 )
+            ),
+            Requirement(
+                id: "claude-login",
+                name: "Claude sign-in",
+                purpose: "Lets Claude Code write summaries",
+                path: home.appending(path: ".local/bin/claude"),
+                isOptional: false,
+                kind: .tool(arguments: ["auth", "status"], installCommand: "claude auth login"),
+                failureMessage: "Not signed in. Run the command in Terminal."
             ),
             Requirement(
                 id: "model-base",
@@ -118,7 +141,7 @@ public enum SetupCatalog {
             }
             do {
                 let status = try await runTool(requirement.path, arguments: arguments, timeout: .seconds(15))
-                return status == 0 ? .ready : .failed("Exited with status \(status)")
+                return status == 0 ? .ready : .failed(requirement.failureMessage ?? "Exited with status \(status)")
             } catch {
                 return .failed(error.localizedDescription)
             }
@@ -162,7 +185,7 @@ func runTool(
     let process = Process()
     process.executableURL = executable
     process.arguments = arguments
-    process.environment = ["HOME": FileManager.default.homeDirectoryForCurrentUser.path]
+    process.environment = ToolEnvironment.standard
     process.standardInput = FileHandle.nullDevice
     process.standardOutput = standardOutput
     process.standardError = FileHandle.nullDevice

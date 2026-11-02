@@ -35,11 +35,13 @@ public struct Library: Sendable {
             uniquingKeysWith: { first, _ in first }
         )
 
+        let statuses = try JobStore.statuses(db)
+
         return tapes.map { tape in
             let items = (sourcesByTape[tape.id ?? -1] ?? []).map { source in
                 ShelfTape.Item(source: source, name: nameBySource[source.id ?? -1].flatMap(\.self) ?? tape.title)
             }
-            return ShelfTape(tape: tape, items: items)
+            return ShelfTape(tape: tape, items: items, status: statuses[tape.id ?? -1] ?? .idle)
         }
     }
 

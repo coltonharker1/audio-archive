@@ -1,4 +1,5 @@
-# Generates Remanence.xcodeproj. Run `xcodegen` after adding or removing targets.
+# Generates Remanence.xcodeproj and Remanence/Info.plist.
+# Run `xcodegen` after adding or removing targets or files.
 name: Remanence
 options:
   bundleIdPrefix: com.colton
@@ -13,9 +14,29 @@ targets:
     type: application
     platform: macOS
     sources:
-      - Remanence
+      - path: Remanence
+        excludes:
+          - Info.plist
     dependencies:
       - package: RemanenceCore
+    info:
+      path: Remanence/Info.plist
+      properties:
+        CFBundleDisplayName: Remanence
+        LSApplicationCategoryType: public.app-category.music
+        # Lets audio and folders be dropped on the Dock icon. The Alternate rank
+        # means Remanence never becomes the default app for opening audio.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Audio
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - public.audio
+          - CFBundleTypeName: Folder of Recordings
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - public.folder
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.colton.remanence
@@ -23,10 +44,7 @@ targets:
         MARKETING_VERSION: "0.1"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"
-        GENERATE_INFOPLIST_FILE: YES
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
-        INFOPLIST_KEY_CFBundleDisplayName: Remanence
-        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.music
         # Personal app that runs local tools, so it stays out of the sandbox.
         CODE_SIGN_IDENTITY: "-"
         ENABLE_HARDENED_RUNTIME: NO

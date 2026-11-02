@@ -5,6 +5,9 @@ public enum KnownTools {
     public static let ffmpeg = URL(filePath: "/opt/homebrew/bin/ffmpeg")
     public static let ffprobe = URL(filePath: "/opt/homebrew/bin/ffprobe")
     public static let whisper = URL(filePath: "/opt/homebrew/bin/whisper-cli")
+    public static var claude: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appending(path: ".local/bin/claude")
+    }
 }
 
 /// SHA-256 of a file, read in pieces so large masters don't load into memory.

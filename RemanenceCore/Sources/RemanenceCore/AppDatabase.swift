@@ -132,6 +132,19 @@ public struct AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v3-pipeline") { db in
+            try db.alter(table: "job") { t in
+                t.add(column: "next_attempt_at", .datetime)
+                t.add(column: "pid", .integer)
+            }
+            try db.alter(table: "source") { t in
+                t.add(column: "transcript_model", .text)
+            }
+            try db.alter(table: "tape") { t in
+                t.add(column: "title_is_provisional", .boolean).notNull().defaults(to: false)
+            }
+        }
+
         return migrator
     }
 }
