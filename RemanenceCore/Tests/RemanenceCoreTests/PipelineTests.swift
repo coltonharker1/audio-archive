@@ -101,7 +101,7 @@ import Testing
 @Suite struct WhisperOutputTests {
     @Test func readsSegments() throws {
         let data = Data(#"{"transcription":[{"offsets":{"from":6150,"to":11210},"text":" Hello there. "},{"offsets":{"from":11210,"to":12000},"text":"   "}]}"#.utf8)
-        #expect(try Pipeline.parseWhisper(data) == [.init(start: 6.15, end: 11.21, text: "Hello there.")])
+        #expect(try Pipeline.parseWhisper(data) == [TranscriptLine(start: 6.15, end: 11.21, text: "Hello there.")])
     }
 
     @Test func badOutputIsRejected() {

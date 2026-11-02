@@ -38,6 +38,8 @@ public struct Job: Codable, Identifiable, Hashable, Sendable, FetchableRecord, M
     public var attempt: Int = 0
     public var maxAttempts: Int
     public var model: String?
+    /// A comparison transcript, stored apart and never replacing the real one.
+    public var candidate: Bool = false
     public var error: String?
     public var createdAt: Date
     public var startedAt: Date?
@@ -78,7 +80,7 @@ public enum JobStore {
                 WHEN 'transcribe' THEN NOT EXISTS (
                     SELECT 1 FROM job p WHERE p.source_id = j.source_id AND p.type = 'prep' AND p.status != 'complete')
                 WHEN 'summarize' THEN NOT EXISTS (
-                    SELECT 1 FROM job p WHERE p.source_id = t.source_id AND p.type = 'transcribe' AND p.status != 'complete')
+                    SELECT 1 FROM job p WHERE p.source_id = t.source_id AND p.type = 'transcribe' AND p.candidate = 0 AND p.status != 'complete')
                 ELSE 1 END
             ORDER BY j.id
             LIMIT 1
@@ -122,7 +124,8 @@ public enum JobStore {
             arguments: [message, now, jobID]
         )
 
-        guard let source = job.sourceId else { return }
+        // Nothing depends on a comparison, so its failure stays its own.
+        guard let source = job.sourceId, !job.candidate else { return }
         let blocked = "Waiting on an earlier step that failed."
         if job.type == .prep {
             try db.execute(

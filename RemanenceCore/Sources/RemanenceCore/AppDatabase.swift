@@ -145,6 +145,19 @@ public struct AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v4-candidates") { db in
+            try db.alter(table: "job") { t in
+                t.add(column: "candidate", .boolean).notNull().defaults(to: false)
+            }
+            // A second transcript waiting to be compared. It stays apart from the
+            // real one, so nothing changes until a choice is made.
+            try db.create(table: "transcript_candidate") { t in
+                t.primaryKey("source_id", .integer).references("source", onDelete: .cascade)
+                t.column("model", .text).notNull()
+                t.column("segments", .jsonText).notNull()
+            }
+        }
+
         return migrator
     }
 }

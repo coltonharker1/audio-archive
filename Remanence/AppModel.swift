@@ -27,6 +27,10 @@ enum ShelfFilter: String, CaseIterable, Identifiable {
     }
 }
 
+enum Route: Equatable {
+    case shelf, search, readAlong
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -50,9 +54,22 @@ final class AppModel {
     private(set) var importProgress: ImportProgress?
     private(set) var jobProgress: [Int64: Double] = [:]
     private(set) var opensAtLogin = SMAppService.mainApp.status == .enabled
-    var filter = ShelfFilter.all
+    private(set) var route = Route.shelf
+    private(set) var searchResults: [SearchTapeResult] = []
+    private(set) var isSearching = false
+    var searchRequested = false
+    var editingLineID: Int64?
+    var isComparingTranscripts = false
+    var filter = ShelfFilter.all {
+        didSet { if route == .readAlong || route == .search { leaveToShelf() } }
+    }
     var message: String?
+    var searchText = "" {
+        didSet { if searchText != oldValue { runSearch() } }
+    }
 
+    @ObservationIgnored private var routeBeforeReadAlong = Route.shelf
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
     @ObservationIgnored private var queue: JobQueue?
     @ObservationIgnored private var isObservingShelf = false
 
@@ -224,6 +241,136 @@ final class AppModel {
         }
     }
 
+    func hasModel(_ name: String) -> Bool {
+        guard let database else { return false }
+        return Pipeline(database: database, paths: paths).hasModel(name)
+    }
+
+    // MARK: Read-along
+
+    var backLabel: String {
+        routeBeforeReadAlong == .search ? "Results" : "Shelf"
+    }
+
+    func openReadAlong(_ tape: ShelfTape) {
+        routeBeforeReadAlong = route == .search ? .search : .shelf
+        select(tape)
+        route = .readAlong
+    }
+
+    func leaveReadAlong() {
+        route = routeBeforeReadAlong == .search && !searchText.isEmpty ? .search : .shelf
+    }
+
+    private func leaveToShelf() {
+        route = .shelf
+        searchText = ""
+    }
+
+    /// Changes track without starting playback.
+    func choose(itemAt index: Int) {
+        selectedItemIndex = index
+        Task { await loadSelectedItem(thenPlay: false) }
+    }
+
+    func setApproved(_ tape: ShelfTape, _ approved: Bool) async {
+        await perform { try await $0.setApproved(tapeID: tape.id, approved: approved) }
+    }
+
+    func setContext(_ tape: ShelfTape, _ context: String) async {
+        await perform { try await $0.setContext(tapeID: tape.id, context: context) }
+    }
+
+    func requestSummary(_ tape: ShelfTape) async {
+        await perform { try await $0.requestSummary(tapeID: tape.id) }
+    }
+
+    func updateLine(id: Int64, text: String) async {
+        await perform { try await $0.updateSegment(id: id, text: text) }
+    }
+
+    func requestComparison(sourceID: Int64, model: String) async {
+        await perform { try await $0.requestComparison(sourceID: sourceID, model: model) }
+    }
+
+    func keepCurrentTranscript(sourceID: Int64) async {
+        await perform { try await $0.discardCandidate(sourceID: sourceID) }
+    }
+
+    func useCandidate(sourceID: Int64) async {
+        await perform { try await $0.adoptCandidate(sourceID: sourceID) }
+    }
+
+    private func perform(_ action: (Library) async throws -> Void) async {
+        guard let library else { return }
+        do {
+            try await action(library)
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    // MARK: Search
+
+    func search(for text: String) {
+        searchText = "\"\(text)\""
+    }
+
+    /// Waits for a short pause in typing, so results don't flicker on every key.
+    private func runSearch() {
+        searchTask?.cancel()
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !query.isEmpty else {
+            searchResults = []
+            isSearching = false
+            if route == .search { route = .shelf }
+            return
+        }
+        if route != .search { route = .search }
+        isSearching = true
+
+        guard let library else { return }
+        searchTask = Task {
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            do {
+                let results = try await library.search(query)
+                guard !Task.isCancelled else { return }
+                searchResults = results
+            } catch is CancellationError {
+                return
+            } catch {
+                message = "Search didn’t work. \(error.localizedDescription)"
+            }
+            isSearching = false
+        }
+    }
+
+    /// Opens a search result, playing from the moment if one was chosen.
+    func openResult(_ result: SearchTapeResult, moment: SearchMoment?) {
+        guard let tape = shelf.first(where: { $0.id == result.tapeID }) else { return }
+        routeBeforeReadAlong = .search
+
+        let index = moment.flatMap { moment in
+            tape.items.firstIndex { $0.source.id == moment.sourceID }
+        } ?? 0
+        let needsLoad = selectedTapeID != tape.id || selectedItemIndex != index
+        selectedTapeID = tape.id
+        selectedItemIndex = index
+        route = .readAlong
+
+        Task {
+            if needsLoad || player.currentURL == nil {
+                await loadSelectedItem(thenPlay: false)
+            }
+            if let moment {
+                await player.seek(to: moment.time)
+                player.play()
+            }
+        }
+    }
+
     // MARK: Open at login
 
     func setOpensAtLogin(_ enabled: Bool) {
@@ -252,6 +399,7 @@ final class AppModel {
                 if let selectedTapeID, !tapes.contains(where: { $0.id == selectedTapeID }) {
                     self.selectedTapeID = nil
                     player.stop()
+                    if route == .readAlong { route = .shelf }
                 }
             }
         } catch {

@@ -21,6 +21,10 @@ struct RemanenceApp: App {
                     .keyboardShortcut("i", modifiers: [.command, .shift])
                     .disabled(model.importProgress != nil)
             }
+            CommandGroup(after: .textEditing) {
+                Button("Search Tapes") { model.searchRequested = true }
+                    .keyboardShortcut("f")
+            }
         }
 
         MenuBarExtra {
@@ -34,6 +38,41 @@ struct RemanenceApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var keyMonitor: Any?
+
+    /// Space and the arrow keys control playback everywhere except while typing.
+    /// A plain button shortcut would catch the space bar inside text fields too.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            guard modifiers.isEmpty else { return event }
+            let keyCode = event.keyCode
+            nonisolated(unsafe) let window = event.window
+            let handled = MainActor.assumeIsolated { Self.handlePlaybackKey(keyCode, in: window) }
+            return handled ? nil : event
+        }
+    }
+
+    @MainActor
+    private static func handlePlaybackKey(_ keyCode: UInt16, in window: NSWindow?) -> Bool {
+        let player = AppModel.shared.player
+        // The event's own window is the reliable one. NSApp.keyWindow can be empty,
+        // and treating that as "not typing" would swallow spaces from text fields.
+        let responder = (window ?? NSApp.keyWindow)?.firstResponder
+        guard player.currentURL != nil, !(responder is NSText) else { return false }
+        switch keyCode {
+        case 49:
+            player.togglePlayback()
+        case 123:
+            Task { await player.seek(to: max(0, player.currentTime - 5)) }
+        case 124:
+            Task { await player.seek(to: min(player.duration, player.currentTime + 5)) }
+        default:
+            return false
+        }
+        return true
+    }
+
     /// Closing the window leaves the menu bar item running, so work carries on.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false

@@ -4,6 +4,7 @@ import SwiftUI
 struct LibraryView: View {
     @Environment(AppModel.self) private var model
     @State private var isDropTargeted = false
+    @FocusState private var isSearchFocused: Bool
 
     var body: some View {
         @Bindable var model = model
@@ -29,16 +30,33 @@ struct LibraryView: View {
                 if model.importProgress != nil {
                     ImportBanner()
                 }
-                if model.shelf.isEmpty && model.hasLoadedShelf {
-                    EmptyShelfView()
-                } else {
-                    ShelfView()
-                }
-                if model.selectedTape != nil {
-                    TapePanel()
+                switch model.route {
+                case .readAlong:
+                    if let tape = model.selectedTape {
+                        ReadAlongView(tape: tape)
+                    }
+                case .search:
+                    SearchResultsView()
+                case .shelf:
+                    if model.shelf.isEmpty && model.hasLoadedShelf {
+                        EmptyShelfView()
+                    } else {
+                        ShelfView()
+                    }
+                    if model.selectedTape != nil {
+                        TapePanel()
+                    }
                 }
             }
             .background(Theme.paper)
+        }
+        .searchable(text: $model.searchText, placement: .toolbar, prompt: "Search every word on every tape")
+        .searchFocused($isSearchFocused)
+        .onChange(of: model.searchRequested) { _, requested in
+            if requested {
+                isSearchFocused = true
+                model.searchRequested = false
+            }
         }
         .dropDestination(for: URL.self) { urls, _ in
             Task { await model.add(urls) }

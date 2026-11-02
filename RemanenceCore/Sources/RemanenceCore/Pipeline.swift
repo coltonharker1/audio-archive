@@ -108,10 +108,12 @@ public struct Pipeline: Sendable {
         guard let sourceID = source.id else { throw PipelineError.missingRecord }
 
         // Don't start a long run whose result couldn't be saved.
-        let hasEdits = try await database.writer.read { db in
-            try Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM segment WHERE source_id = ? AND edited = 1)", arguments: [sourceID]) ?? false
+        if !job.candidate {
+            let hasEdits = try await database.writer.read { db in
+                try Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM segment WHERE source_id = ? AND edited = 1)", arguments: [sourceID]) ?? false
+            }
+            if hasEdits { throw PipelineError.wouldOverwriteEdits }
         }
-        if hasEdits { throw PipelineError.wouldOverwriteEdits }
 
         let model = job.model ?? "base"
         let vad = modelURL("silero-v5.1.2").deletingLastPathComponent().appending(path: "ggml-silero-v5.1.2.bin")
@@ -149,6 +151,18 @@ public struct Pipeline: Sendable {
 
         let data = try Data(contentsOf: work.appending(path: "out.json"))
         let segments = try Self.parseWhisper(data)
+
+        if job.candidate {
+            let json = String(decoding: try JSONEncoder().encode(segments), as: UTF8.self)
+            try await database.writer.write { db in
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO transcript_candidate (source_id, model, segments) VALUES (?, ?, ?)",
+                    arguments: [sourceID, model, json]
+                )
+            }
+            return
+        }
+
         try await database.writer.write { db in
             try db.execute(sql: "DELETE FROM segment WHERE source_id = ?", arguments: [sourceID])
             for segment in segments {
@@ -195,17 +209,22 @@ public struct Pipeline: Sendable {
         )
 
         try await database.writer.write { db in
+            let previousLong = try Track.fetchOne(db, key: trackID)?.summaryDetails?.summaryLong
             try db.execute(
                 sql: "UPDATE track SET recording_type = ?, summary_short = ?, summary = ? WHERE id = ?",
                 arguments: [summary.recordingType, summary.summaryShort, summary.json, trackID]
             )
-            // Fills gaps only. Anything you or the site already set is left alone.
+            // Fills gaps only. Anything you or the site already set is left alone,
+            // though a description that came from an earlier summary can be updated.
             guard var current = try Tape.fetchOne(db, key: tape.id) else { return }
             if current.titleIsProvisional, !summary.suggestedTitle.isEmpty {
                 current.title = summary.suggestedTitle
                 current.titleIsProvisional = false
             }
-            if current.description == nil, !summary.summaryLong.isEmpty { current.description = summary.summaryLong }
+            let cameFromSummary = previousLong != nil && current.description == previousLong
+            if current.description == nil || cameFromSummary, !summary.summaryLong.isEmpty {
+                current.description = summary.summaryLong
+            }
             if current.era == nil, !summary.estimatedEra.isEmpty { current.era = summary.estimatedEra }
             try current.update(db)
         }
@@ -319,13 +338,7 @@ public struct Pipeline: Sendable {
         return Double(digits).map { min($0 / 100, 1) }
     }
 
-    struct ParsedSegment: Equatable {
-        let start: Double
-        let end: Double
-        let text: String
-    }
-
-    static func parseWhisper(_ data: Data) throws -> [ParsedSegment] {
+    static func parseWhisper(_ data: Data) throws -> [TranscriptLine] {
         struct Output: Decodable {
             struct Item: Decodable {
                 struct Offsets: Decodable {
@@ -343,7 +356,7 @@ public struct Pipeline: Sendable {
         return output.transcription.compactMap { item in
             let text = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { return nil }
-            return ParsedSegment(start: Double(item.offsets.from) / 1000, end: Double(item.offsets.to) / 1000, text: text)
+            return TranscriptLine(start: Double(item.offsets.from) / 1000, end: Double(item.offsets.to) / 1000, text: text)
         }
     }
 }

@@ -11,7 +11,7 @@ struct TapePanel: View {
                 VStack(alignment: .leading, spacing: 10) {
                     details(for: tape)
                     activity(for: tape)
-                    transport
+                    TransportBar()
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -46,6 +46,10 @@ struct TapePanel: View {
                     .padding(.top, 2)
                     .textSelection(.enabled)
             }
+            Button("Read Along", systemImage: "text.alignleft") {
+                model.openReadAlong(tape)
+            }
+            .padding(.top, 4)
         }
     }
 
@@ -74,7 +78,44 @@ struct TapePanel: View {
         return parts.joined(separator: " · ")
     }
 
-    private var transport: some View {
+    private func trackList(for tape: ShelfTape) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(tape.items.enumerated()), id: \.element.id) { index, item in
+                    let isCurrent = index == model.selectedItemIndex
+                    Button {
+                        model.play(itemAt: index)
+                    } label: {
+                        HStack {
+                            Text(item.name)
+                                .lineLimit(1)
+                                .fontWeight(isCurrent ? .semibold : .regular)
+                            Spacer(minLength: 8)
+                            Text(TimeLabel.clock(item.source.duration))
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(Theme.inkMuted)
+                        }
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.ink)
+                        .padding(.horizontal, 8)
+                        .frame(minHeight: 26)
+                        .background(isCurrent ? Theme.board.opacity(0.45) : .clear, in: .rect(cornerRadius: 5))
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(isCurrent ? .isSelected : [])
+                }
+            }
+        }
+        .frame(width: 280, height: 132)
+    }
+}
+
+/// Play, pause and scrub. Shared by the shelf panel and the read-along screen.
+struct TransportBar: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
         HStack(spacing: 14) {
             Button {
                 model.togglePlayback()
@@ -87,7 +128,6 @@ struct TapePanel: View {
                     .contentShape(.circle)
             }
             .buttonStyle(.plain)
-            .keyboardShortcut(.space, modifiers: [])
             .disabled(model.player.failure != nil)
             .accessibilityLabel(model.player.isPlaying ? "Pause" : "Play")
 
@@ -123,37 +163,5 @@ struct TapePanel: View {
                     .frame(minWidth: 48, alignment: .leading)
             }
         }
-    }
-
-    private func trackList(for tape: ShelfTape) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(Array(tape.items.enumerated()), id: \.element.id) { index, item in
-                    let isCurrent = index == model.selectedItemIndex
-                    Button {
-                        model.play(itemAt: index)
-                    } label: {
-                        HStack {
-                            Text(item.name)
-                                .lineLimit(1)
-                                .fontWeight(isCurrent ? .semibold : .regular)
-                            Spacer(minLength: 8)
-                            Text(TimeLabel.clock(item.source.duration))
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(Theme.inkMuted)
-                        }
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.ink)
-                        .padding(.horizontal, 8)
-                        .frame(minHeight: 26)
-                        .background(isCurrent ? Theme.board.opacity(0.45) : .clear, in: .rect(cornerRadius: 5))
-                        .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(isCurrent ? .isSelected : [])
-                }
-            }
-        }
-        .frame(width: 280, height: 132)
     }
 }
