@@ -132,15 +132,39 @@ public enum ToolError: LocalizedError {
     public var errorDescription: String? { "Didn't respond in time" }
 }
 
-/// Runs a tool and returns its exit status, discarding its output so a full pipe
-/// can never hang it. The cancel-safe runner for pipeline jobs comes in Phase 2.
-func runTool(_ executable: URL, arguments: [String], timeout: Duration) async throws -> Int32 {
+/// Runs a tool and returns its exit status and standard output. The output goes
+/// through a file because a full pipe could otherwise hang the tool.
+func runToolCapturingOutput(
+    _ executable: URL,
+    arguments: [String],
+    timeout: Duration
+) async throws -> (status: Int32, output: Data) {
+    let file = FileManager.default.temporaryDirectory
+        .appending(path: "remanence-tool-\(UUID().uuidString)")
+    FileManager.default.createFile(atPath: file.path, contents: nil)
+    defer { try? FileManager.default.removeItem(at: file) }
+
+    let handle = try FileHandle(forWritingTo: file)
+    defer { try? handle.close() }
+
+    let status = try await runTool(executable, arguments: arguments, timeout: timeout, standardOutput: handle)
+    return (status, try Data(contentsOf: file))
+}
+
+/// Runs a tool and returns its exit status, discarding its output by default.
+/// The cancel-safe runner for pipeline jobs comes in Phase 2.
+func runTool(
+    _ executable: URL,
+    arguments: [String],
+    timeout: Duration,
+    standardOutput: FileHandle = .nullDevice
+) async throws -> Int32 {
     let process = Process()
     process.executableURL = executable
     process.arguments = arguments
     process.environment = ["HOME": FileManager.default.homeDirectoryForCurrentUser.path]
     process.standardInput = FileHandle.nullDevice
-    process.standardOutput = FileHandle.nullDevice
+    process.standardOutput = standardOutput
     process.standardError = FileHandle.nullDevice
 
     let exited = AsyncStream<Void>.makeStream()

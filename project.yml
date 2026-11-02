@@ -24,6 +24,7 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"
         GENERATE_INFOPLIST_FILE: YES
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         INFOPLIST_KEY_CFBundleDisplayName: Remanence
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.music
         # Personal app that runs local tools, so it stays out of the sandbox.

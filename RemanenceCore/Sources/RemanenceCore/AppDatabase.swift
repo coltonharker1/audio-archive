@@ -125,6 +125,13 @@ public struct AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v2-tape-details") { db in
+            try db.alter(table: "tape") { t in
+                t.add(column: "era", .text)
+                t.add(column: "description", .text)
+            }
+        }
+
         return migrator
     }
 }

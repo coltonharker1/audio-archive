@@ -188,9 +188,10 @@ normalization.
 
 ## Later
 
-Automatic track suggestions, chapters from transcripts, box photos with
-Continuity Camera, hum and tape-speed checks, a compact list view, and dark mode
-tuning. The split test showed silence alone needs a raw transfer to tune against,
+Filtering and sorting the shelf, a label on each shelf saying what it holds, a
+list view showing everything in one place with an icon for each tape's format,
+automatic track suggestions, chapters from transcripts, box photos with
+Continuity Camera, hum and tape-speed checks, and dark mode tuning. The split test showed silence alone needs a raw transfer to tune against,
 and sorting by gap length is the likely starting point.
 
 ## Open items
