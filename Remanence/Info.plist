@@ -49,5 +49,7 @@
 	<string>1</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.music</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Remanence records tapes from your audio interface. macOS treats every audio input as a microphone. Audio stays on this Mac.</string>
 </dict>
 </plist>

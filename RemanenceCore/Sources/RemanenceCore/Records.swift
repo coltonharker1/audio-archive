@@ -13,6 +13,8 @@ public struct Tape: Codable, Identifiable, Hashable, Sendable, FetchableRecord, 
     public var era: String?
     public var description: String?
     public var context: String?
+    public var machineId: Int64?
+    public var speed: String?
     public var titleIsProvisional: Bool = false
     public var approvedAt: Date?
     public var pushedAt: Date?
@@ -32,6 +34,7 @@ public struct Source: Codable, Identifiable, Hashable, Sendable, FetchableRecord
     public var id: Int64?
     public var tapeId: Int64
     public var position: Int
+    public var side: String?
     public var masterPath: String
     public var sha256: String?
     public var prepPath: String?

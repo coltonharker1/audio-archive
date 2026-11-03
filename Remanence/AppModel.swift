@@ -28,7 +28,7 @@ enum ShelfFilter: String, CaseIterable, Identifiable {
 }
 
 enum Route: Equatable {
-    case shelf, search, readAlong, review
+    case shelf, search, readAlong, review, record
 }
 
 @MainActor
@@ -70,6 +70,7 @@ final class AppModel {
 
     @ObservationIgnored private var routeBeforeReadAlong = Route.shelf
     @ObservationIgnored private(set) lazy var reviewModel = ReviewModel(app: self)
+    @ObservationIgnored private(set) lazy var recordModel = RecordModel(app: self)
     @ObservationIgnored private var searchTask: Task<Void, Never>?
     @ObservationIgnored private var queue: JobQueue?
     @ObservationIgnored private var isObservingShelf = false
@@ -159,6 +160,14 @@ final class AppModel {
         observeSystemSleep(queue)
 
         do {
+            // A recording cut off by a crash comes first, so it's on the shelf and
+            // queued like any other before work starts.
+            if let library {
+                let recovered = try await library.recoverInterruptedCaptures()
+                if !recovered.isEmpty {
+                    message = "Recovered an interrupted recording: \(recovered.joined(separator: ", ")). Everything up to the interruption is saved."
+                }
+            }
             try await database.writer.write { db in
                 try JobStore.enqueueMissingTranscripts(db) { pipeline.hasModel($0) }
                 try JobStore.enqueueMissingPeaks(db)
@@ -196,6 +205,7 @@ final class AppModel {
 
     /// Plain words for what's happening with a tape, or nil when it's settled.
     func activityText(for tape: ShelfTape) -> String? {
+        if recordModel.isRecording, recordModel.recordingTapeID == tape.id { return "Recording…" }
         switch tape.status {
         case .idle:
             return nil
@@ -243,6 +253,24 @@ final class AppModel {
             if case .working = $0.status { return true }
             return false
         }
+    }
+
+    // MARK: Recording
+
+    func openRecording() {
+        route = .record
+    }
+
+    func leaveRecording() {
+        route = .shelf
+    }
+
+    func suspendPipelineForRecording() async {
+        await queue?.suspendForRecording()
+    }
+
+    func resumePipeline() async {
+        await queue?.setPaused(false)
     }
 
     func hasModel(_ name: String) -> Bool {
@@ -462,6 +490,10 @@ final class AppModel {
 
     func delete(_ tape: ShelfTape) async {
         guard let library else { return }
+        if recordModel.isRecording, recordModel.recordingTapeID == tape.id {
+            message = "This tape is still recording."
+            return
+        }
         if selectedTapeID == tape.id {
             player.stop()
             selectedTapeID = nil

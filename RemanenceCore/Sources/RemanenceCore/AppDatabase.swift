@@ -158,6 +158,25 @@ public struct AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v5-machines") { db in
+            try db.alter(table: "machine") { t in
+                t.add(column: "device_uid", .text)
+                t.add(column: "channel_mode", .text)
+            }
+            let machines: [(String, String, String)] = [
+                ("7\" Reel", "7\" Reel-to-Reel", #"["7½ ips","3¾ ips","1⅞ ips"]"#),
+                ("5\" Reel", "5\" Reel-to-Reel", #"["3¾ ips","1⅞ ips","7½ ips"]"#),
+                ("Cassette", "Cassette", #"["1⅞ ips"]"#),
+                ("Microcassette", "Microcassette", #"["2.4 cm/s","1.2 cm/s"]"#),
+            ]
+            for (name, medium, speeds) in machines {
+                try db.execute(
+                    sql: "INSERT INTO machine (name, medium, speeds) VALUES (?, ?, ?)",
+                    arguments: [name, medium, speeds]
+                )
+            }
+        }
+
         return migrator
     }
 }

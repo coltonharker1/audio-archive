@@ -1,5 +1,10 @@
 # audio-archive
 
+> **This README describes the old Go app, which is being replaced by Remanence, a
+> native macOS app in this repo.** For the new app, see [CLAUDE.md](CLAUDE.md) and
+> [docs/native-app-plan.md](docs/native-app-plan.md). Don't run the old
+> `archive sync`, because it can overwrite live site entries.
+
 A local pipeline for ingesting, prepping, transcribing, summarizing, and searching audio recordings — built for archiving digitized cassette and reel-to-reel tapes, generalized to handle any audio content (sermons, voicemails, audio diaries, musical performances, interviews, etc.).
 
 Everything runs locally. Go handles the pipeline, CLI, orchestration, and metadata. Transcription runs through [whisper.cpp](https://github.com/ggerganov/whisper.cpp) with Metal acceleration on Apple Silicon. Summarization uses a local LLM via Ollama.

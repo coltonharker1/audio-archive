@@ -66,6 +66,16 @@ public actor JobQueue {
         isPaused = paused
     }
 
+    /// Stops everything for a recording, returning running jobs to the queue. A
+    /// transcription running alongside capture could cause dropouts, and a tape may
+    /// only get one good pass.
+    public func suspendForRecording() async {
+        isPaused = true
+        let tasks = Array(running.values)
+        tasks.forEach { $0.cancel() }
+        for task in tasks { await task.value }
+    }
+
     /// Holds new jobs while the Mac sleeps. It wakes briefly for maintenance with
     /// no usable network, and a job started then would fail through no fault of its own.
     public func systemWillSleep() {

@@ -24,6 +24,7 @@ targets:
       properties:
         CFBundleDisplayName: Remanence
         LSApplicationCategoryType: public.app-category.music
+        NSMicrophoneUsageDescription: Remanence records tapes from your audio interface. macOS treats every audio input as a microphone. Audio stays on this Mac.
         # Lets audio and folders be dropped on the Dock icon. The Alternate rank
         # means Remanence never becomes the default app for opening audio.
         CFBundleDocumentTypes:
@@ -45,8 +46,11 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
-        # Personal app that runs local tools, so it stays out of the sandbox.
-        CODE_SIGN_IDENTITY: "-"
+        # A stable signature, so macOS remembers the microphone permission between
+        # builds. Personal app that runs local tools, so it stays out of the sandbox.
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "Apple Development: Colton Harker (2ZMS5QPMP4)"
+        DEVELOPMENT_TEAM: 4DX965488P
         ENABLE_HARDENED_RUNTIME: NO
         ENABLE_APP_SANDBOX: NO
 schemes:

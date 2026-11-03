@@ -386,6 +386,28 @@ import Testing
         await queue.stop()
     }
 
+    @Test func recordingStopsRunningJobsWithoutUsingAttempts() async throws {
+        let started = Locked(0)
+        let queue = JobQueue(database: database, pollInterval: .milliseconds(5)) { _, _ in
+            started.mutate { $0 += 1 }
+            try await Task.sleep(for: .seconds(60))
+        }
+        try await queue.start()
+        try await waitFor { started.value == 1 }
+
+        await queue.suspendForRecording()
+
+        let prep = try #require(try await database.writer.read { db in try Job.order(Column("id")).fetchOne(db) })
+        #expect(prep.status == .pending)
+        #expect(prep.attempt == 0)
+        try await Task.sleep(for: .milliseconds(60))
+        #expect(started.value == 1, "nothing restarts during a recording")
+
+        await queue.setPaused(false)
+        try await waitFor { started.value == 2 }
+        await queue.stop()
+    }
+
     @Test func pausingHoldsNewJobs() async throws {
         let ran = Locked(0)
         let queue = JobQueue(database: database, pollInterval: .milliseconds(5)) { _, _ in

@@ -17,6 +17,9 @@ struct RemanenceApp: App {
         }
         .commands {
             CommandGroup(replacing: .newItem) {
+                Button("Record a Tape") { model.openRecording() }
+                    .keyboardShortcut("r")
+                    .disabled(model.route == .record)
                 Button("Import Backup…") { model.chooseBackupToImport() }
                     .keyboardShortcut("i", modifiers: [.command, .shift])
                     .disabled(model.importProgress != nil)
@@ -129,6 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Stops tools cleanly so nothing is left running and no attempts are used up.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         Task { @MainActor in
+            await AppModel.shared.recordModel.stopForQuit()
             await AppModel.shared.shutDown()
             sender.reply(toApplicationShouldTerminate: true)
         }

@@ -35,6 +35,8 @@ struct LibraryView: View {
                     if let tape = model.selectedTape {
                         ReadAlongView(tape: tape)
                     }
+                case .record:
+                    RecordView()
                 case .review:
                     if let tape = model.selectedTape {
                         ReviewView(tape: tape)
@@ -53,6 +55,13 @@ struct LibraryView: View {
                 }
             }
             .background(Theme.paper)
+        }
+        .toolbar {
+            if model.route == .shelf {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Record a Tape", systemImage: "record.circle") { model.openRecording() }
+                }
+            }
         }
         .searchable(text: $model.searchText, placement: .toolbar, prompt: "Search every word on every tape")
         .searchFocused($isSearchFocused)
