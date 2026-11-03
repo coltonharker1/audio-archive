@@ -47,6 +47,7 @@ public struct Pipeline: Sendable {
         case .prep: try await prep(job, context: context)
         case .transcribe: try await transcribe(job, context: context)
         case .summarize: try await summarize(job, context: context)
+        case .peaks: try await drawWaveform(job, context: context)
         }
     }
 
@@ -172,6 +173,39 @@ public struct Pipeline: Sendable {
                 )
             }
             try db.execute(sql: "UPDATE source SET transcript_model = ? WHERE id = ?", arguments: [model, sourceID])
+        }
+    }
+
+    /// Reduces the audio to a small file of levels, so a long tape draws instantly.
+    private func drawWaveform(_ job: Job, context: JobContext) async throws {
+        let source = try await source(for: job)
+        let master = try libraryURL(source.masterPath)
+        guard let sourceID = source.id else { throw PipelineError.missingRecord }
+
+        let work = try makeWorkFolder()
+        defer { try? FileManager.default.removeItem(at: work) }
+        let raw = work.appending(path: "audio.raw")
+        try await runChecked(
+            ffmpeg,
+            name: "FFmpeg",
+            arguments: [
+                "-nostdin", "-y", "-i", master.path, "-map", "0:a:0", "-ac", "1",
+                "-ar", String(Waveform.decodeRate), "-f", "s16le", "-c:a", "pcm_s16le", raw.path,
+            ],
+            timeout: .seconds(max(3600, source.duration)),
+            context: context
+        )
+
+        let waveform = try Waveform(decodedAudioAt: raw)
+        let folder = URL(filePath: source.masterPath).deletingLastPathComponent().lastPathComponent
+        let stem = master.deletingPathExtension().lastPathComponent
+        let relative = "peaks/\(folder)/\(stem).peaks"
+        let output = try libraryURL(relative)
+        try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try waveform.encoded().write(to: output, options: .atomic)
+
+        try await database.writer.write { db in
+            try db.execute(sql: "UPDATE source SET peaks_path = ? WHERE id = ?", arguments: [relative, sourceID])
         }
     }
 

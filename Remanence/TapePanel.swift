@@ -46,8 +46,13 @@ struct TapePanel: View {
                     .padding(.top, 2)
                     .textSelection(.enabled)
             }
-            Button("Read Along", systemImage: "text.alignleft") {
-                model.openReadAlong(tape)
+            HStack {
+                Button("Read Along", systemImage: "text.alignleft") {
+                    model.openReadAlong(tape)
+                }
+                Button("Review", systemImage: "waveform") {
+                    model.openReview(tape)
+                }
             }
             .padding(.top, 4)
         }
@@ -72,7 +77,7 @@ struct TapePanel: View {
 
     private func meta(for tape: ShelfTape) -> String {
         var parts = [tape.tape.catalogNumber, tape.tape.medium?.uppercased()].compactMap(\.self)
-        if tape.items.count > 1 { parts.append("\(tape.items.count) TRACKS") }
+        if tape.trackCount > 1 { parts.append("\(tape.trackCount) TRACKS") }
         parts.append(TimeLabel.clock(tape.duration))
         if let era = tape.tape.era { parts.append(era.uppercased()) }
         return parts.joined(separator: " · ")

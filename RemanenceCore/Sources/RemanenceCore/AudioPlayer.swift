@@ -16,6 +16,8 @@ public final class AudioPlayer {
 
     @ObservationIgnored private let player = AVPlayer()
     @ObservationIgnored private var scrubbing = false
+    @ObservationIgnored private var liveSeekInFlight = false
+    @ObservationIgnored private var pendingLiveSeek: Double?
 
     public init() {
         let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
@@ -59,7 +61,20 @@ public final class AudioPlayer {
         }
         // Another file may have been chosen while this one was being checked.
         guard currentURL == url else { return false }
-        player.replaceCurrentItem(with: AVPlayerItem(asset: asset))
+        let item = AVPlayerItem(asset: asset)
+        player.replaceCurrentItem(with: item)
+
+        // A seek before the item is ready is dropped without any error, so opening
+        // a tape at a search result would quietly start from the beginning.
+        let deadline = ContinuousClock.now + .seconds(10)
+        while item.status == .unknown, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        guard currentURL == url else { return false }
+        guard item.status == .readyToPlay else {
+            failure = "This recording can’t be played."
+            return false
+        }
         return true
     }
 
@@ -85,6 +100,49 @@ public final class AudioPlayer {
         currentTime = 0
         duration = 0
         currentURL = nil
+    }
+
+    /// The exact position right now, for smooth drawing and placing markers.
+    /// `currentTime` only updates a few times a second.
+    public var preciseTime: Double {
+        if scrubbing { return currentTime }
+        let seconds = player.currentTime().seconds
+        return seconds.isFinite ? seconds : currentTime
+    }
+
+    /// Plays faster each time it's called, up to four times normal speed.
+    public func playFaster() {
+        let next: Float = player.rate >= 2 ? 4 : 2
+        player.rate = next
+        isPlaying = true
+    }
+
+    /// Follows a drag on a waveform. Only the newest position is seeked to once the
+    /// previous seek finishes, so requests can't pile up behind the pointer.
+    public func scrubLive(to time: Double) {
+        currentTime = time
+        scrubbing = true
+        pendingLiveSeek = time
+        startNextLiveSeek()
+    }
+
+    private func startNextLiveSeek() {
+        guard !liveSeekInFlight, let time = pendingLiveSeek else { return }
+        pendingLiveSeek = nil
+        liveSeekInFlight = true
+        Task {
+            await player.seek(
+                to: CMTime(seconds: time, preferredTimescale: 600),
+                toleranceBefore: .zero,
+                toleranceAfter: .zero
+            )
+            liveSeekInFlight = false
+            if pendingLiveSeek != nil {
+                startNextLiveSeek()
+            } else {
+                scrubbing = false
+            }
+        }
     }
 
     /// Moves the displayed position while the user drags, without seeking yet.

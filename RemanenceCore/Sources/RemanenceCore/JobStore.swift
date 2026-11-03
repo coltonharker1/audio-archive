@@ -2,22 +2,21 @@ import Foundation
 import GRDB
 
 public enum JobType: String, Codable, Sendable {
-    case prep, transcribe, summarize
+    case prep, transcribe, summarize, peaks
 
     /// How many of this type can run at once. Parallel Whisper runs were killed
     /// for running out of memory in the April 2026 batch, so it's limited to one.
     var limit: Int {
         switch self {
-        case .prep: 2
+        case .prep, .summarize, .peaks: 2
         case .transcribe: 1
-        case .summarize: 2
         }
     }
 
     var maxAttempts: Int {
         switch self {
         case .prep: 3
-        case .transcribe, .summarize: 2
+        case .transcribe, .summarize, .peaks: 2
         }
     }
 }
@@ -198,6 +197,21 @@ public enum JobStore {
             let model = WhisperModel.preferred(for: TapeFormat(medium: medium), hasModel: hasModel)
             var transcribe = Job.make(.transcribe, sourceID: source, model: model, now: now)
             try transcribe.insert(db)
+        }
+    }
+
+    /// Adds waveform drawing for sources that don't have it yet. It has no
+    /// dependencies, so a tape can be reviewed before it's been transcribed.
+    public static func enqueueMissingPeaks(_ db: Database, now: Date = Date()) throws {
+        let sources = try Int64.fetchAll(db, sql: """
+            SELECT s.id FROM source s
+            WHERE s.peaks_path IS NULL AND s.sha256 IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM job j WHERE j.source_id = s.id AND j.type = 'peaks')
+            ORDER BY s.id
+            """)
+        for source in sources {
+            var job = Job.make(.peaks, sourceID: source, now: now)
+            try job.insert(db)
         }
     }
 

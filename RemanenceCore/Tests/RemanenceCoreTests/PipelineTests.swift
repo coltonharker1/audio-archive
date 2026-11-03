@@ -413,6 +413,6 @@ import Testing
         let types = try await database.writer.read { db in
             try Job.order(Column("id")).fetchAll(db).map(\.type)
         }
-        #expect(types == [.prep, .transcribe, .summarize])
+        #expect(types == [.prep, .transcribe, .summarize, .peaks])
     }
 }

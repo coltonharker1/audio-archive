@@ -90,6 +90,8 @@ struct ReadAlongView: View {
 
                 Spacer()
 
+                Button("Review", systemImage: "waveform") { model.openReview(tape) }
+
                 if tape.tape.pushedAt == nil {
                     let approved = tape.tape.approvedAt != nil
                     Button(approved ? "Approved" : "Looks Good", systemImage: approved ? "checkmark" : "hand.thumbsup") {

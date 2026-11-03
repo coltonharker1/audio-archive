@@ -35,6 +35,10 @@ struct LibraryView: View {
                     if let tape = model.selectedTape {
                         ReadAlongView(tape: tape)
                     }
+                case .review:
+                    if let tape = model.selectedTape {
+                        ReviewView(tape: tape)
+                    }
                 case .search:
                     SearchResultsView()
                 case .shelf:

@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import GRDB
 import Testing
 @testable import RemanenceCore
 
@@ -10,6 +11,51 @@ import Testing
 /// Set REMANENCE_LIBRARY to import into that folder instead of a temporary one.
 @Suite(.enabled(if: ProcessInfo.processInfo.environment["REMANENCE_BACKUP"] != nil))
 struct RealBackupTests {
+    /// Measures what "scrubs instantly" means on the longest real tape. It needs a
+    /// library with waveforms already drawn, so it's skipped without one.
+    @MainActor
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["REMANENCE_LIBRARY"] != nil))
+    func aLongTapeOpensAndScrubsQuickly() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        let root = URL(filePath: try #require(environment["REMANENCE_LIBRARY"]), directoryHint: .isDirectory)
+        let paths = LibraryPaths(library: root, support: LibraryPaths.standard.support)
+        let database = try AppDatabase.open(at: paths.database)
+        let library = Library(database: database, paths: paths)
+
+        let longest = try await database.writer.read { db in
+            try Source.order(Column("duration").desc).fetchOne(db)
+        }
+        let source = try #require(longest)
+        let peaksPath = try #require(source.peaksPath)
+        let clock = ContinuousClock()
+
+        var started = clock.now
+        let waveform = try await library.loadWaveform(path: peaksPath)
+        let loadTime = clock.now - started
+
+        started = clock.now
+        for step in 0..<60 {
+            let start = Double(step) * source.duration / 60
+            _ = waveform.levels(from: start, to: start + 90, columns: 500)
+        }
+        let drawTime = (clock.now - started) / 60
+
+        let player = AudioPlayer()
+        #expect(await player.load(try library.url(forLibraryPath: source.masterPath), duration: source.duration))
+        started = clock.now
+        for step in 0..<40 {
+            let target = Double((step * 37) % 40) * source.duration / 40
+            await player.seek(to: target)
+            #expect(abs(player.preciseTime - target) < 0.1, "the seek must really land")
+        }
+        let seekTime = (clock.now - started) / 40
+
+        print("\(Int(source.duration / 60)) min tape: load waveform \(loadTime), draw zoomed view \(drawTime), seek \(seekTime)")
+        #expect(loadTime < .milliseconds(500))
+        #expect(drawTime < .milliseconds(16), "a frame at 60 fps")
+        #expect(seekTime < .milliseconds(100))
+    }
+
     @Test func everyEntryImportsAndEveryMasterIsPlayable() async throws {
         let environment = ProcessInfo.processInfo.environment
         let backup = URL(filePath: try #require(environment["REMANENCE_BACKUP"]), directoryHint: .isDirectory)

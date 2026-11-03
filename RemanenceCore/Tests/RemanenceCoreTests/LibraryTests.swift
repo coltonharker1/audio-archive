@@ -97,6 +97,18 @@ import Testing
         #expect(player.failure != nil)
     }
 
+    /// Opening a tape at a search result seeks right after loading.
+    @Test func aSeekStraightAfterLoadingLands() async throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: "remanence-player-\(UUID().uuidString).wav")
+        try BackupFixture.wav(seconds: 4, seed: "seek").write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let player = AudioPlayer()
+        #expect(await player.load(file, duration: 4))
+        await player.seek(to: 3)
+        #expect(abs(player.preciseTime - 3) < 0.05)
+    }
+
     @Test func aFilePlaysAndSeeks() async throws {
         let file = FileManager.default.temporaryDirectory.appending(path: "remanence-player-\(UUID().uuidString).wav")
         try BackupFixture.wav(seconds: 4, seed: "player").write(to: file)

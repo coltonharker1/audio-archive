@@ -39,27 +39,50 @@ struct RemanenceApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var keyMonitor: Any?
+    private var scrollMonitor: Any?
 
     /// Space and the arrow keys control playback everywhere except while typing.
     /// A plain button shortcut would catch the space bar inside text fields too.
     func applicationDidFinishLaunching(_ notification: Notification) {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-            guard modifiers.isEmpty else { return event }
+            let shift = modifiers == .shift
             let keyCode = event.keyCode
+            let characters = event.charactersIgnoringModifiers ?? ""
             nonisolated(unsafe) let window = event.window
-            let handled = MainActor.assumeIsolated { Self.handlePlaybackKey(keyCode, in: window) }
+
+            if modifiers == .command || modifiers == [.command, .shift], characters.lowercased() == "z" {
+                let handled = MainActor.assumeIsolated {
+                    Self.handleUndo(redo: modifiers.contains(.shift), in: window)
+                }
+                return handled ? nil : event
+            }
+
+            guard modifiers.isEmpty || shift else { return event }
+            let handled = MainActor.assumeIsolated {
+                Self.handleKey(keyCode, characters: characters, shift: shift, in: window)
+            }
+            return handled ? nil : event
+        }
+        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+            let horizontal = event.scrollingDeltaX
+            let vertical = event.scrollingDeltaY
+            let handled = MainActor.assumeIsolated { Self.handleScroll(horizontal: horizontal, vertical: vertical) }
             return handled ? nil : event
         }
     }
 
     @MainActor
-    private static func handlePlaybackKey(_ keyCode: UInt16, in window: NSWindow?) -> Bool {
-        let player = AppModel.shared.player
+    private static func handleKey(_ keyCode: UInt16, characters: String, shift: Bool, in window: NSWindow?) -> Bool {
+        let model = AppModel.shared
+        let player = model.player
         // The event's own window is the reliable one. NSApp.keyWindow can be empty,
         // and treating that as "not typing" would swallow spaces from text fields.
         let responder = (window ?? NSApp.keyWindow)?.firstResponder
         guard player.currentURL != nil, !(responder is NSText) else { return false }
+
+        if model.handleReviewKey(code: keyCode, characters: characters, shift: shift) { return true }
+        guard !shift else { return false }
         switch keyCode {
         case 49:
             player.togglePlayback()
@@ -70,6 +93,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         default:
             return false
         }
+        return true
+    }
+
+    /// Undo on the review screen covers markers and trims. Text fields keep their own.
+    @MainActor
+    private static func handleUndo(redo: Bool, in window: NSWindow?) -> Bool {
+        let model = AppModel.shared
+        let responder = (window ?? NSApp.keyWindow)?.firstResponder
+        guard model.route == .review, !(responder is NSText) else { return false }
+        if redo { model.reviewModel.redo() } else { model.reviewModel.undo() }
+        return true
+    }
+
+    /// A sideways swipe pans the zoomed waveform on the review screen.
+    @MainActor
+    private static func handleScroll(horizontal: CGFloat, vertical: CGFloat) -> Bool {
+        let model = AppModel.shared
+        guard model.route == .review, abs(horizontal) > abs(vertical), horizontal != 0 else { return false }
+        let review = model.reviewModel
+        review.moveZoom(to: review.zoomStart - Double(horizontal) * review.zoomSpan / 800)
         return true
     }
 

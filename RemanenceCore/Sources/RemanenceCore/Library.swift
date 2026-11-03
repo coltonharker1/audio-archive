@@ -36,12 +36,23 @@ public struct Library: Sendable {
         )
 
         let statuses = try JobStore.statuses(db)
+        let markerRows = try Row.fetchAll(db, sql: """
+            SELECT s.tape_id, count(*) AS n FROM marker m
+            JOIN source s ON s.id = m.source_id
+            GROUP BY s.tape_id
+            """)
+        let markerCounts = Dictionary(uniqueKeysWithValues: markerRows.map { (row: Row) -> (Int64, Int) in (row["tape_id"], row["n"]) })
 
         return tapes.map { tape in
             let items = (sourcesByTape[tape.id ?? -1] ?? []).map { source in
                 ShelfTape.Item(source: source, name: nameBySource[source.id ?? -1].flatMap(\.self) ?? tape.title)
             }
-            return ShelfTape(tape: tape, items: items, status: statuses[tape.id ?? -1] ?? .idle)
+            return ShelfTape(
+                tape: tape,
+                items: items,
+                status: statuses[tape.id ?? -1] ?? .idle,
+                markerCount: markerCounts[tape.id ?? -1] ?? 0
+            )
         }
     }
 

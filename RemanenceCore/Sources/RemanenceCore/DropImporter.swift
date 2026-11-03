@@ -155,6 +155,7 @@ public struct DropImporter: Sendable {
                     try track.insert(db)
                     try JobStore.enqueuePipeline(db, sourceID: source.id!, trackID: track.id!, model: model, now: now)
                 }
+                try JobStore.enqueueMissingPeaks(db, now: now)
             }
             summary.added.append(title)
         } catch {

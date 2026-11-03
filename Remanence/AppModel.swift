@@ -28,7 +28,7 @@ enum ShelfFilter: String, CaseIterable, Identifiable {
 }
 
 enum Route: Equatable {
-    case shelf, search, readAlong
+    case shelf, search, readAlong, review
 }
 
 @MainActor
@@ -61,7 +61,7 @@ final class AppModel {
     var editingLineID: Int64?
     var isComparingTranscripts = false
     var filter = ShelfFilter.all {
-        didSet { if route == .readAlong || route == .search { leaveToShelf() } }
+        didSet { if route != .shelf { leaveToShelf() } }
     }
     var message: String?
     var searchText = "" {
@@ -69,6 +69,7 @@ final class AppModel {
     }
 
     @ObservationIgnored private var routeBeforeReadAlong = Route.shelf
+    @ObservationIgnored private(set) lazy var reviewModel = ReviewModel(app: self)
     @ObservationIgnored private var searchTask: Task<Void, Never>?
     @ObservationIgnored private var queue: JobQueue?
     @ObservationIgnored private var isObservingShelf = false
@@ -160,6 +161,7 @@ final class AppModel {
         do {
             try await database.writer.write { db in
                 try JobStore.enqueueMissingTranscripts(db) { pipeline.hasModel($0) }
+                try JobStore.enqueueMissingPeaks(db)
             }
             try await queue.start()
         } catch {
@@ -205,6 +207,8 @@ final class AppModel {
             return "Getting ready…"
         case .working(.summarize, _):
             return "Writing a summary…"
+        case .working(.peaks, _):
+            return "Reading the waveform…"
         case .working(.transcribe, let jobID):
             if let fraction = jobProgress[jobID], fraction > 0 {
                 return "Listening… \(Int(fraction * 100))%"
@@ -260,6 +264,22 @@ final class AppModel {
 
     func leaveReadAlong() {
         route = routeBeforeReadAlong == .search && !searchText.isEmpty ? .search : .shelf
+    }
+
+    func openReview(_ tape: ShelfTape) {
+        routeBeforeReadAlong = route == .search ? .search : .shelf
+        select(tape)
+        route = .review
+    }
+
+    func leaveReview() {
+        leaveReadAlong()
+    }
+
+    /// Keys for the review screen. Returns whether the key was used.
+    func handleReviewKey(code: UInt16, characters: String, shift: Bool) -> Bool {
+        guard route == .review else { return false }
+        return reviewModel.handleKey(code: code, characters: characters, shift: shift)
     }
 
     private func leaveToShelf() {
@@ -399,7 +419,7 @@ final class AppModel {
                 if let selectedTapeID, !tapes.contains(where: { $0.id == selectedTapeID }) {
                     self.selectedTapeID = nil
                     player.stop()
-                    if route == .readAlong { route = .shelf }
+                    if route == .readAlong || route == .review { route = .shelf }
                 }
             }
         } catch {
@@ -507,6 +527,7 @@ final class AppModel {
                 let pipeline = Pipeline(database: database, paths: paths)
                 try await database.writer.write { db in
                     try JobStore.enqueueMissingTranscripts(db) { pipeline.hasModel($0) }
+                    try JobStore.enqueueMissingPeaks(db)
                 }
             }
         } catch {

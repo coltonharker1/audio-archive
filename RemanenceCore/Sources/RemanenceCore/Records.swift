@@ -93,7 +93,10 @@ public struct ShelfTape: Identifiable, Hashable, Sendable {
     public let tape: Tape
     public let items: [Item]
     public var status: TapeStatus = .idle
+    public var markerCount: Int = 0
 
+    /// One track per source, plus one for each marker.
+    public var trackCount: Int { items.count + markerCount }
     public var id: Int64 { tape.id ?? 0 }
     public var duration: Double { items.reduce(0) { $0 + $1.source.duration } }
 }
