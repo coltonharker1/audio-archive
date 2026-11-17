@@ -208,8 +208,11 @@ import Testing
         }
         #expect(tape.title == "A Better Title")
         #expect(!tape.titleIsProvisional)
-        #expect(tape.description == "Long.")
-        #expect(tape.era == "1990s")
+        // The description and date are written by hand. The summary is only reference.
+        #expect(tape.description == nil)
+        #expect(tape.era == nil)
+        #expect(track.summaryDetails?.summaryLong == "Long.")
+        #expect(track.description == nil)
         #expect(source.prepPath?.hasPrefix("processed/") == true)
         #expect(source.transcriptModel == "base")
         #expect(track.recordingType == "voicemail")

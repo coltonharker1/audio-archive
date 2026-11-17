@@ -37,6 +37,10 @@ struct LibraryView: View {
                     }
                 case .record:
                     RecordView()
+                case .post:
+                    if let tape = model.selectedTape {
+                        SitePostView(tape: tape)
+                    }
                 case .review:
                     if let tape = model.selectedTape {
                         ReviewView(tape: tape)

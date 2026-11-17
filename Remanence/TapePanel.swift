@@ -53,6 +53,9 @@ struct TapePanel: View {
                 Button("Review", systemImage: "waveform") {
                     model.openReview(tape)
                 }
+                Button("Site Post", systemImage: "doc.richtext") {
+                    model.openPost(tape)
+                }
             }
             .padding(.top, 4)
         }

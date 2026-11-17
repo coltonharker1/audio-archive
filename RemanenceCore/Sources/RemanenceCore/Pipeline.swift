@@ -243,23 +243,18 @@ public struct Pipeline: Sendable {
         )
 
         try await database.writer.write { db in
-            let previousLong = try Track.fetchOne(db, key: trackID)?.summaryDetails?.summaryLong
             try db.execute(
                 sql: "UPDATE track SET recording_type = ?, summary_short = ?, summary = ? WHERE id = ?",
                 arguments: [summary.recordingType, summary.summaryShort, summary.json, trackID]
             )
-            // Fills gaps only. Anything you or the site already set is left alone,
-            // though a description that came from an earlier summary can be updated.
+            // A placeholder title, like a file name, is replaced by the suggested one.
             guard var current = try Tape.fetchOne(db, key: tape.id) else { return }
             if current.titleIsProvisional, !summary.suggestedTitle.isEmpty {
                 current.title = summary.suggestedTitle
                 current.titleIsProvisional = false
             }
-            let cameFromSummary = previousLong != nil && current.description == previousLong
-            if current.description == nil || cameFromSummary, !summary.summaryLong.isEmpty {
-                current.description = summary.summaryLong
-            }
-            if current.era == nil, !summary.estimatedEra.isEmpty { current.era = summary.estimatedEra }
+            // The description and recording date are written by hand. The summary is
+            // shown beside them as reference, and never fills them in by itself.
             try current.update(db)
         }
     }

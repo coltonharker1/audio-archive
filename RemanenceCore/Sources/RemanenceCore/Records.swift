@@ -12,6 +12,8 @@ public struct Tape: Codable, Identifiable, Hashable, Sendable, FetchableRecord, 
     public var medium: String?
     public var era: String?
     public var description: String?
+    public var whereFound: String?
+    public var dateFound: String?
     public var context: String?
     public var machineId: Int64?
     public var speed: String?
@@ -63,6 +65,27 @@ public struct Track: Codable, Identifiable, Hashable, Sendable, FetchableRecord,
     public var recordingType: String?
     public var summaryShort: String?
     public var summary: String?
+    /// Written by hand for the site. `summary` is Claude's, kept as reference.
+    public var description: String?
+
+    public mutating func didInsert(_ inserted: InsertionSuccess) {
+        id = inserted.rowID
+    }
+}
+
+/// A photo of a tape, its box or anything that came with it.
+public struct TapeImage: Codable, Identifiable, Hashable, Sendable, FetchableRecord, MutablePersistableRecord {
+    public static let databaseTableName = "tape_image"
+    public static let databaseColumnDecodingStrategy = DatabaseColumnDecodingStrategy.convertFromSnakeCase
+    public static let databaseColumnEncodingStrategy = DatabaseColumnEncodingStrategy.convertToSnakeCase
+
+    public var id: Int64?
+    public var tapeId: Int64
+    public var position: Int
+    public var path: String
+    public var sha256: String
+    public var filename: String
+    public var caption: String?
 
     public mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID

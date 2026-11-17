@@ -177,6 +177,29 @@ public struct AppDatabase: Sendable {
             }
         }
 
+
+        migrator.registerMigration("v6-site-post") { db in
+            // Everything a post on the site has, so it can all be written here.
+            try db.alter(table: "tape") { t in
+                t.add(column: "where_found", .text)
+                t.add(column: "date_found", .text)
+            }
+            // Written by hand. The AI summary stays separate, as reference.
+            try db.alter(table: "track") { t in
+                t.add(column: "description", .text)
+            }
+            try db.create(table: "tape_image") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("tape_id", .integer).notNull().indexed().references("tape", onDelete: .cascade)
+                t.column("position", .integer).notNull()
+                t.column("path", .text).notNull()
+                t.column("sha256", .text).notNull()
+                t.column("filename", .text).notNull()
+                t.column("caption", .text)
+                t.uniqueKey(["tape_id", "sha256"])
+            }
+        }
+
         return migrator
     }
 }

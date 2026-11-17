@@ -91,12 +91,14 @@ struct ReadAlongView: View {
                 Spacer()
 
                 Button("Review", systemImage: "waveform") { model.openReview(tape) }
+                Button("Site Post", systemImage: "doc.richtext") { model.openPost(tape) }
 
                 if tape.tape.pushedAt == nil {
                     let approved = tape.tape.approvedAt != nil
                     Button(approved ? "Approved" : "Looks Good", systemImage: approved ? "checkmark" : "hand.thumbsup") {
                         Task { await model.setApproved(tape, !approved) }
                     }
+
                 }
             }
 
@@ -427,11 +429,10 @@ private struct ReadAlongDetails: View {
             }
             .disabled(tape.status.isActive || readAlong?.transcriptModel == nil)
 
-            if tape.tape.pushedAt != nil {
-                Text("This stays in Remanence. It won’t change the site’s description.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.inkMuted)
-            }
+            Text("Summaries are reference for what you write in Site Post. They’re never published by themselves.")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.inkMuted)
+                .lineLimit(2)
         }
     }
 

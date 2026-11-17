@@ -39,10 +39,12 @@ public struct SummaryDetails: Decodable, Equatable, Sendable {
     public let organizations: [String]?
     public let tags: [String]?
     public let notableQuotes: [String]?
+    public var estimatedEra: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case summaryShort = "summary_short"
         case summaryLong = "summary_long"
+        case estimatedEra = "estimated_era"
         case people, places, organizations, tags
         case notableQuotes = "notable_quotes"
     }

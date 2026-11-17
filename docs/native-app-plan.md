@@ -16,7 +16,7 @@ Written 2026-11-02. Mockups: https://claude.ai/artifact/Vec7wX1cEPYiuFKDuKfzE9
 | 3. Read-along and search | Done, committed |
 | 4. Review | Done, committed (`997a3cd`) |
 | **5. Recording** | **Committed and tested live on the MacBook mic. Needs the Scarlett to finish.** |
-| 6. Push to the site | Not started |
+| 6. Push to the site | **Site API written on the site's local `native-push` branch, uncommitted and not deployed. App side not started.** |
 | 7. Retire the old code | Not started |
 
 ### Next steps
@@ -29,8 +29,7 @@ Live testing also replaced `AVAudioEngine` in `AudioCapture` with an input-only 
 audio unit (see Lessons). No automated test covers that, because it needs hardware.
 
 **1. Calibrate with real hardware.** Needs the user at their machines with the
-Scarlett. Record one full raw cassette side with some known track breaks, note the
-Scarlett model, then tune the meter thresholds (`LevelAdvice`) and end-of-tape
+Scarlett 2i2. Record one full raw cassette side with some known track breaks, then tune the meter thresholds (`LevelAdvice`) and end-of-tape
 detection (`TapeEndDetector`). Both are provisional. Also check these, none of which
 the MacBook mic could test:
 
@@ -43,8 +42,42 @@ the MacBook mic could test:
 
 Phase 5 is only done when a full tape records with no dropouts.
 
-**2. Phase 6, push to the site.** Needs access to the site's environment variables,
-and confirmation before deploying or changing its database.
+**2. Phase 6, push to the site.** Both sides are written but uncommitted, and neither
+has touched the real site. The site's side is on its local `native-push` branch. Its
+unit tests, types, lint and build pass, and its rejection paths ran against a local
+server. **Its database and R2 paths have never run**, nor has the migration SQL or the
+backfill's `--apply`.
+
+The app's side is the **Site Post** screen (`SitePostView`, with `SitePost.swift`,
+`Push.swift` and `SiteClient.swift` in the core). It covers every field a post on the
+site has: title, medium, estimated recording date, where found, date acquired, a
+description, photos with captions in order, and each track's name and description. The
+user writes the text. Claude's summaries are shown beside it as reference, with a
+"Use as a Starting Point" button, and never fill anything in by themselves. Photos lose
+their GPS location on import, and HEIC becomes JPEG. It passed unit tests and an
+end-to-end push of a synthetic tape to a local mock of the API on 2026-11-17. Typing
+into the fields, Add Photos and drag and drop haven't been tried by hand.
+
+The site's side got photo support on 2026-11-17 (`images` in `POST /api/sync`, plus the
+legacy `imageUrl`). That change is uncommitted on the site's `main`. The earlier sync
+work was committed there as `7ef86f7` and pushed to GitHub on 2026-11-16, so it may
+already be deployed, though nothing can use it until `SYNC_API_KEY` exists.
+
+Not built yet: changing a post that's already on the site, and showing track
+descriptions on the site's pages. It stores them but doesn't display them.
+
+What's left, with the user's confirmation each time:
+
+1. Create a `SYNC_API_KEY`. Vercel doesn't have one, and the routes answer 501 without
+   it. Every environment shares one `DATABASE_URL` and one R2 bucket, so a preview or a
+   local run uses production data. Test against a Neon branch first.
+2. Apply `drizzle/0002_sync_files.sql` directly (not `drizzle-kit migrate`, because the
+   journal doesn't list `0001`), then run the backfill.
+3. Push a test tape to the Neon branch, check it, then deploy and repeat for real.
+
+The API differs from the list below in two ways. File hashes live in a new `sync_files`
+table rather than on tracks, so the backfill changes no live entry. Upload keys are
+`audio/<sha256>.<ext>`, so a repeat upload replaces the same object.
 
 ### Not yet tried in the running app
 
@@ -63,6 +96,7 @@ the window can be on screen.
   needs a listen.
 - **Recording:** every on-screen button, Large Meter, alert sounds, notifications,
   unplugging the interface, and the low-disk warning.
+- **Push:** every on-screen button, the key field, Stop, and a long upload.
 - **Dark mode:** the app is forced to light mode until it gets its own design.
 
 ### Known limits
@@ -73,6 +107,8 @@ the window can be on screen.
   individual tracks.
 - A new tape waits behind anything already queued.
 - Closing the lid pauses processing, so keep it open for long batches.
+- A push started again after a crash re-cuts unfinished files. Very long stereo tapes
+  could pass the 5 GB single-upload limit, and those are refused with a clear message.
 - A crash or force-quit while the record screen is open leaves the input at 96 kHz,
   because the old rate is only restored on a normal stop. Recording still works, and
   Audio MIDI Setup can put it back.
@@ -131,8 +167,7 @@ so there's no sandbox, App Store build or scale work.
   off-machine copy yet.
 - **Toolchain.** Xcode 27.2 and Swift 6.4, with `ffmpeg`, `claude`, `whisper-cpp`,
   `xcodegen` and the base, medium and Silero VAD models all installed.
-- **Hardware.** M1 Pro with 16 GB. The user has a Focusrite Scarlett (model not yet
-  known), cassette and microcassette machines, a 7" reel and a 5" reel.
+- **Hardware.** M1 Pro with 16 GB. The user has a Focusrite Scarlett 2i2, cassette and microcassette machines, a 7" reel and a 5" reel.
 
 ## Architecture
 
@@ -304,7 +339,7 @@ and sorting by gap length is the likely starting point.
 
 ## Open items
 
-- Scarlett model, and confirming the 24-bit/96 kHz capture the app aims for
+- Confirming the 24-bit/96 kHz capture the app aims for on the Scarlett 2i2
 - Whether unsynced recordings exist on an older Mac or in R2 drafts
 - Copying `~/Music/remanence-backup` off this Mac
 - RA-006's "24-bit · 96 kHz" label, since its only file is 16 kHz, 16-bit mono

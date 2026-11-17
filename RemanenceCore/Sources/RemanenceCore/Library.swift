@@ -80,16 +80,20 @@ public struct Library: Sendable {
     ) async throws {
         try await database.writer.write { db in
             let sources = try Source.filter(Column("tape_id") == tapeID).fetchAll(db)
-            let stored = sources.flatMap { [$0.masterPath, $0.prepPath, $0.peaksPath].compactMap(\.self) }
+            let images = try String.fetchAll(db, sql: "SELECT path FROM tape_image WHERE tape_id = ?", arguments: [tapeID])
+            let stored = sources.flatMap { [$0.masterPath, $0.prepPath, $0.peaksPath].compactMap(\.self) } + images
 
             // Check every path before moving anything.
             let urls = try stored.map { try url(forLibraryPath: $0) }
+            let uuid = try String.fetchOne(db, sql: "SELECT uuid FROM tape WHERE id = ?", arguments: [tapeID])
 
             try db.execute(sql: "DELETE FROM tape WHERE id = ?", arguments: [tapeID])
 
             for url in urls where FileManager.default.fileExists(atPath: url.path) {
                 try trash(url)
             }
+            // Leftovers from an unfinished push are copies, so they can just go.
+            if let uuid { try? FileManager.default.removeItem(at: pushFolder(tapeUUID: uuid)) }
             for directory in Set(urls.map { $0.deletingLastPathComponent() }) {
                 let contents = try? FileManager.default.contentsOfDirectory(atPath: directory.path)
                 if contents?.isEmpty == true { try? FileManager.default.removeItem(at: directory) }

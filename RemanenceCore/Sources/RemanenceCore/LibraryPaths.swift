@@ -27,10 +27,11 @@ public struct LibraryPaths: Sendable {
     public var masters: URL { library.appending(path: "masters", directoryHint: .isDirectory) }
     public var processed: URL { library.appending(path: "processed", directoryHint: .isDirectory) }
     public var peaks: URL { library.appending(path: "peaks", directoryHint: .isDirectory) }
+    public var images: URL { library.appending(path: "images", directoryHint: .isDirectory) }
     public var models: URL { support.appending(path: "models", directoryHint: .isDirectory) }
 
     public func createDirectories() throws {
-        for directory in [masters, processed, peaks, models] {
+        for directory in [masters, processed, peaks, images, models] {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }
     }

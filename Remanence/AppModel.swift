@@ -28,7 +28,7 @@ enum ShelfFilter: String, CaseIterable, Identifiable {
 }
 
 enum Route: Equatable {
-    case shelf, search, readAlong, review, record
+    case shelf, search, readAlong, review, record, post
 }
 
 @MainActor
@@ -71,6 +71,7 @@ final class AppModel {
     @ObservationIgnored private var routeBeforeReadAlong = Route.shelf
     @ObservationIgnored private(set) lazy var reviewModel = ReviewModel(app: self)
     @ObservationIgnored private(set) lazy var recordModel = RecordModel(app: self)
+    @ObservationIgnored private(set) lazy var pushModel = PushModel(app: self)
     @ObservationIgnored private var searchTask: Task<Void, Never>?
     @ObservationIgnored private var queue: JobQueue?
     @ObservationIgnored private var isObservingShelf = false
@@ -258,7 +259,24 @@ final class AppModel {
     // MARK: Recording
 
     func openRecording() {
+        // Uploading and encoding could cause dropouts, and a pass of a tape can't be redone.
+        guard !pushModel.isPushing else {
+            message = "A push is running. Recording can start once it finishes."
+            return
+        }
         route = .record
+    }
+
+    // MARK: Pushing
+
+    func openPost(_ tape: ShelfTape) {
+        routeBeforeReadAlong = route == .search ? .search : .shelf
+        select(tape)
+        route = .post
+    }
+
+    func leavePost() {
+        leaveReadAlong()
     }
 
     func leaveRecording() {
@@ -447,7 +465,7 @@ final class AppModel {
                 if let selectedTapeID, !tapes.contains(where: { $0.id == selectedTapeID }) {
                     self.selectedTapeID = nil
                     player.stop()
-                    if route == .readAlong || route == .review { route = .shelf }
+                    if route == .readAlong || route == .review || route == .post { route = .shelf }
                 }
             }
         } catch {
@@ -489,6 +507,10 @@ final class AppModel {
     }
 
     func delete(_ tape: ShelfTape) async {
+        guard pushModel.pushingTapeID != tape.id else {
+            message = "This tape is being pushed. Stop the push before deleting it."
+            return
+        }
         guard let library else { return }
         if recordModel.isRecording, recordModel.recordingTapeID == tape.id {
             message = "This tape is still recording."
