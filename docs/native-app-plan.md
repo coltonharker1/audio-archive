@@ -16,7 +16,7 @@ Written 2026-11-02. Mockups: https://claude.ai/artifact/Vec7wX1cEPYiuFKDuKfzE9
 | 3. Read-along and search | Done, committed |
 | 4. Review | Done, committed (`997a3cd`) |
 | **5. Recording** | **Committed and tested live on the MacBook mic. Needs the Scarlett to finish.** |
-| 6. Push to the site | **Site API written on the site's local `native-push` branch, uncommitted and not deployed. App side not started.** |
+| 6. Push to the site | **Live on 2026-11-17.** Push, update and refresh all tested against the real site. Untried by hand. |
 | 7. Retire the old code | Not started |
 
 ### Next steps
@@ -42,51 +42,20 @@ the MacBook mic could test:
 
 Phase 5 is only done when a full tape records with no dropouts.
 
-**2. Phase 6, push to the site.** Both sides are written but uncommitted, and neither
-has touched the real site. The site's side is on its local `native-push` branch. Its
-unit tests, types, lint and build pass, and its rejection paths ran against a local
-server. **Its database and R2 paths have never run**, nor has the migration SQL or the
-backfill's `--apply`.
+**2. Phase 6 is live (2026-11-17).** The site's `main` includes the sync routes, photo
+support, updates, track descriptions and a safer admin delete, and is deployed. The
+migration and backfill were already applied to the production database (16 files in
+`sync_files`). A new `SYNC_API_KEY` is on Vercel (production only) and in the Keychain
+for the app. Checked against the live site: refreshing RA-001 (its 5 tracks matched by
+hash, and its 10 photos downloaded), pushing a test tape (RA-009, unpublished) and
+updating its description. **RA-009 is a test post for the user to delete in the admin.**
+That delete now keeps any file another post still uses.
 
-The app's side is the **Site Post** screen (`SitePostView`, with `SitePost.swift`,
-`Push.swift` and `SiteClient.swift` in the core). It covers every field a post on the
-site has: title, medium, estimated recording date, where found, date acquired, a
-description, photos with captions in order, and each track's name and description. The
-user writes the text. Claude's summaries are shown beside it as reference, with a
-"Use as a Starting Point" button, and never fill anything in by themselves. Photos lose
-their GPS location on import, and HEIC becomes JPEG. It passed unit tests and an
-end-to-end push of a synthetic tape to a local mock of the API on 2026-11-17. Typing
-into the fields, Add Photos and drag and drop haven't been tried by hand.
+**RA-008 isn't in the local backup.** It's an unpublished draft, "Accordion Class 1 —
+Practice Selections" (33 minutes), made by the old sync on 2026-04-15. Its two WAV files
+are only in R2. Download them before anything else happens to that post.
 
-The site's side got photo support, updates and track descriptions on 2026-11-17, on
-its local `companion-app` branch. The earlier sync
-work was committed there as `7ef86f7` and pushed to GitHub on 2026-11-16, so it may
-already be deployed, though nothing can use it until `SYNC_API_KEY` exists.
-
-**Updating posts already on the site** (2026-11-17). Each pushed tape keeps a snapshot
-of what the site had when the app last pushed or refreshed it (`SiteSync.swift`).
-**Refresh from Site** loads the post, including photos and edits made in the admin.
-**Update on Site** sends only the fields that differ from the snapshot. The site
-checks the post's `updatedAt` and refuses with 409 if it changed since, so admin edits
-are never overwritten by accident. Tracks are matched by a file hash the site knows,
-and their text can change but not their audio. A moved marker or a new track is
-explained on the screen and not sent. The seven backup tapes start without a snapshot,
-so they need a refresh before editing, and their tracks match by master hash once the
-backfill has run on the site. Site routes: `GET /api/sync/entry` and
-`POST /api/sync/update`. Track descriptions now show under each track in the site's
-player. Tested with unit tests and a local mock only.
-
-Not built yet: replacing a track's audio, adding or removing tracks after a push, and
-publishing from the app. Publishing stays in the admin on purpose.
-
-What's left, with the user's confirmation each time:
-
-1. Create a `SYNC_API_KEY`. Vercel doesn't have one, and the routes answer 501 without
-   it. Every environment shares one `DATABASE_URL` and one R2 bucket, so a preview or a
-   local run uses production data. Test against a Neon branch first.
-2. Apply `drizzle/0002_sync_files.sql` directly (not `drizzle-kit migrate`, because the
-   journal doesn't list `0001`), then run the backfill.
-3. Push a test tape to the Neon branch, check it, then deploy and repeat for real.
+Previews share the production database and R2 bucket, so test there with care.
 
 The API differs from the list below in two ways. File hashes live in a new `sync_files`
 table rather than on tracks, so the backfill changes no live entry. Upload keys are
