@@ -240,7 +240,7 @@ public struct Pusher: Sendable {
         }
 
         progress(.creating)
-        let catalogNumber = try await site.createEntry(SiteEntry(
+        let state = try await site.createEntry(SiteEntry(
             tapeUuid: plan.tape.uuid,
             title: plan.tape.title,
             medium: plan.medium,
@@ -253,10 +253,27 @@ public struct Pusher: Sendable {
             transcriptSha256: transcriptHash,
             metadata: metadata(for: plan)
         ))
-        try await library.markPushed(tapeID: tapeID, catalogNumber: catalogNumber, now: now())
+        try await library.markPushed(tapeID: tapeID, catalogNumber: state.catalogNumber, now: now())
+        // The site's answer is what later updates are worked out against. The tracks are
+        // known to it by their streaming copies.
+        let post = try await library.database.writer.read { try Library.fetchPost($0, tapeID: tapeID) }
+        if let post {
+            let sentHashes = Dictionary(uniqueKeysWithValues: zip(post.tracks.map { TrackKey($0.sourceID, $0.startMarkerID) }, tracks.map(\.audioSha256)))
+            let previous = SiteSnapshot(
+                published: state.published,
+                fields: .init(title: state.title, medium: state.medium),
+                tracks: post.tracks.compactMap { track in
+                    sentHashes[TrackKey(track.sourceID, track.startMarkerID)].map {
+                        SiteSnapshot.Track(sourceID: track.sourceID, startMarkerID: track.startMarkerID, start: track.start, end: track.end, sha256: $0, title: "", description: nil)
+                    }
+                },
+                images: []
+            )
+            try await recordSiteState(state, tapeID: tapeID, post: post, previous: previous)
+        }
         try? FileManager.default.removeItem(at: folder)
 
-        return PushResult(catalogNumber: catalogNumber, uploaded: missing.count, alreadyThere: files.count - missing.count)
+        return PushResult(catalogNumber: state.catalogNumber, uploaded: missing.count, alreadyThere: files.count - missing.count)
     }
 
     private func metadata(for plan: PushPlan) -> [String: String] {
@@ -267,7 +284,7 @@ public struct Pusher: Sendable {
     }
 
     /// A fresh upload URL is requested for each attempt, because they expire quickly.
-    private func send(_ file: PushFile, progress: @escaping @Sendable (Double) -> Void) async throws {
+    func send(_ file: PushFile, progress: @escaping @Sendable (Double) -> Void) async throws {
         var attempt = 0
         while true {
             do {
@@ -332,7 +349,7 @@ public struct Pusher: Sendable {
         try FileManager.default.moveItem(at: partial, to: output)
     }
 
-    private func describe(_ url: URL, filename: String, contentType: String, kind: PushFile.Kind) throws -> PushFile {
+    func describe(_ url: URL, filename: String, contentType: String, kind: PushFile.Kind) throws -> PushFile {
         let bytes = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
         return PushFile(
             url: url,

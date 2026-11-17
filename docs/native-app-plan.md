@@ -58,13 +58,26 @@ their GPS location on import, and HEIC becomes JPEG. It passed unit tests and an
 end-to-end push of a synthetic tape to a local mock of the API on 2026-11-17. Typing
 into the fields, Add Photos and drag and drop haven't been tried by hand.
 
-The site's side got photo support on 2026-11-17 (`images` in `POST /api/sync`, plus the
-legacy `imageUrl`). That change is uncommitted on the site's `main`. The earlier sync
+The site's side got photo support, updates and track descriptions on 2026-11-17, on
+its local `companion-app` branch. The earlier sync
 work was committed there as `7ef86f7` and pushed to GitHub on 2026-11-16, so it may
 already be deployed, though nothing can use it until `SYNC_API_KEY` exists.
 
-Not built yet: changing a post that's already on the site, and showing track
-descriptions on the site's pages. It stores them but doesn't display them.
+**Updating posts already on the site** (2026-11-17). Each pushed tape keeps a snapshot
+of what the site had when the app last pushed or refreshed it (`SiteSync.swift`).
+**Refresh from Site** loads the post, including photos and edits made in the admin.
+**Update on Site** sends only the fields that differ from the snapshot. The site
+checks the post's `updatedAt` and refuses with 409 if it changed since, so admin edits
+are never overwritten by accident. Tracks are matched by a file hash the site knows,
+and their text can change but not their audio. A moved marker or a new track is
+explained on the screen and not sent. The seven backup tapes start without a snapshot,
+so they need a refresh before editing, and their tracks match by master hash once the
+backfill has run on the site. Site routes: `GET /api/sync/entry` and
+`POST /api/sync/update`. Track descriptions now show under each track in the site's
+player. Tested with unit tests and a local mock only.
+
+Not built yet: replacing a track's audio, adding or removing tracks after a push, and
+publishing from the app. Publishing stays in the admin on purpose.
 
 What's left, with the user's confirmation each time:
 

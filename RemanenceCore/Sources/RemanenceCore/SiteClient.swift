@@ -8,9 +8,13 @@ public protocol SiteAPI: Sendable {
     func requestUpload(_ file: PushFile) async throws -> SiteUpload
     func upload(_ file: PushFile, to url: URL, progress: @escaping @Sendable (Double) -> Void) async throws
     func recordFile(_ file: PushFile, key: String) async throws
-    /// Creates the unpublished entry and returns its catalog number. A tape that's
-    /// already on the site gets its existing number, and its entry isn't changed.
-    func createEntry(_ entry: SiteEntry) async throws -> String
+    /// Creates the unpublished entry. A tape that's already on the site gets its
+    /// existing entry back, unchanged.
+    func createEntry(_ entry: SiteEntry) async throws -> SitePostState
+    func fetchEntry(tapeUUID: String, catalogNumber: String?) async throws -> SitePostState
+    /// Changes only what's sent. Throws `SiteError.changedOnSite` if the post changed
+    /// on the site since `expectedUpdatedAt`.
+    func updateEntry(_ update: SiteUpdate) async throws -> SitePostState
 }
 
 public struct SiteUpload: Equatable, Sendable {
@@ -56,6 +60,7 @@ public struct SiteEntry: Encodable, Equatable, Sendable {
 public enum SiteError: LocalizedError, Equatable {
     case rejectedKey
     case notConfigured
+    case changedOnSite
     case server(status: Int, message: String)
     case unexpectedResponse
 
@@ -63,6 +68,7 @@ public enum SiteError: LocalizedError, Equatable {
         switch self {
         case .rejectedKey: "The site didn’t accept the API key."
         case .notConfigured: "The site has no SYNC_API_KEY set, so it can’t accept pushes yet."
+        case .changedOnSite: "This post changed on the site since the app last read it. Refresh from the site, then make the change again."
         case .server(let status, let message): "The site answered \(status): \(message)"
         case .unexpectedResponse: "The site sent back something unexpected."
         }
@@ -144,10 +150,31 @@ public struct SiteClient: SiteAPI {
         let _: Reply = try await post("api/sync/files", Body(sha256: file.sha256, key: key, bytes: file.bytes))
     }
 
-    public func createEntry(_ entry: SiteEntry) async throws -> String {
-        struct Reply: Decodable { let catalogNumber: String }
-        let reply: Reply = try await post("api/sync", entry)
-        return reply.catalogNumber
+    public func createEntry(_ entry: SiteEntry) async throws -> SitePostState {
+        try await post("api/sync", entry)
+    }
+
+    public func fetchEntry(tapeUUID: String, catalogNumber: String?) async throws -> SitePostState {
+        var components = URLComponents(url: baseURL.appending(path: "api/sync/entry"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "tapeUuid", value: tapeUUID)]
+            + (catalogNumber.map { [URLQueryItem(name: "catalogNumber", value: $0)] } ?? [])
+        var request = URLRequest(url: components.url!)
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await session.data(for: request)
+        try Self.check(response, data: data)
+        do {
+            return try JSONDecoder().decode(SitePostState.self, from: data)
+        } catch {
+            throw SiteError.unexpectedResponse
+        }
+    }
+
+    public func updateEntry(_ update: SiteUpdate) async throws -> SitePostState {
+        do {
+            return try await post("api/sync/update", update)
+        } catch SiteError.server(409, let message) where message.contains("changed on the site") {
+            throw SiteError.changedOnSite
+        }
     }
 
     private func post<Body: Encodable, Reply: Decodable>(_ path: String, _ body: Body) async throws -> Reply {

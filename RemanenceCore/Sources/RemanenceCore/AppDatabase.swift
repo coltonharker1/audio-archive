@@ -200,6 +200,18 @@ public struct AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v7-site-sync") { db in
+            // What the site had when the app last read or wrote the post. Updates are
+            // worked out against it, and refused by the site if it has moved on since.
+            try db.alter(table: "tape") { t in
+                t.add(column: "site_updated_at", .text)
+                t.add(column: "site_snapshot", .jsonText)
+            }
+            try db.alter(table: "tape_image") { t in
+                t.add(column: "site_url", .text)
+            }
+        }
+
         return migrator
     }
 }

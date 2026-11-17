@@ -4,25 +4,62 @@ import Testing
 @testable import RemanenceCore
 
 /// Stands in for the site, keeping what a real one would, so nothing leaves this Mac.
-private actor FakeSite: SiteAPI {
-    var files: Set<String> = []
+/// Updates follow the real site's rules: only what's sent changes, and a stale update
+/// is refused.
+actor FakeSite: SiteAPI {
+    var files: [String: String] = [:]
     var uploads: [String] = []
-    var entries: [String: (number: String, entry: SiteEntry)] = [:]
+    var entries: [String: SitePostState] = [:]
+    var updates: [SiteUpdate] = []
     var failUploadsAfter: Int?
     var failCreate = false
     var temporaryFailures = 0
+    private var clock = 0
 
     func setFailUploadsAfter(_ count: Int?) { failUploadsAfter = count }
     func setFailCreate(_ fail: Bool) { failCreate = fail }
     func setTemporaryFailures(_ count: Int) { temporaryFailures = count }
-    func entry(for uuid: String) -> SiteEntry? { entries[uuid]?.entry }
+    func entry(for key: String) -> SitePostState? { entries[key.lowercased()] ?? entries[key] }
+
+    private func tick() -> String {
+        clock += 1
+        return "2026-11-17T00:00:\(String(format: "%02d", clock)).000Z"
+    }
+
+    private func url(_ sha: String) -> String { "https://r2.invalid/\(files[sha] ?? "missing/\(sha)")" }
+
+    /// As if someone edited the post in the site's admin.
+    func editInAdmin(uuid: String, title: String? = nil, addPhoto: String? = nil, removePhotos: Bool = false) {
+        guard let entry = entries[uuid.lowercased()] else { return }
+        var images = removePhotos ? [] : entry.images
+        if let addPhoto { images.append(.init(url: addPhoto, filename: "admin.jpg", caption: "From the admin")) }
+        entries[uuid.lowercased()] = SitePostState(
+            catalogNumber: entry.catalogNumber, title: title ?? entry.title, description: entry.description,
+            medium: entry.medium, whereFound: entry.whereFound, dateFound: entry.dateFound,
+            estimatedRecordingDate: entry.estimatedRecordingDate, published: entry.published,
+            updatedAt: tick(), tracks: entry.tracks, images: images
+        )
+    }
+
+    /// A post made in the admin before the app existed, with files known by hash.
+    func addAdminPost(uuidForLookup: String?, catalogNumber: String, title: String, trackHashes: [String]) {
+        for sha in trackHashes { files[sha] = "audio/\(catalogNumber.lowercased())-\(sha.prefix(6)).wav" }
+        entries[catalogNumber] = SitePostState(
+            catalogNumber: catalogNumber, title: title, description: "From the admin.", medium: "reel-to-reel-7",
+            published: true, updatedAt: tick(),
+            tracks: trackHashes.enumerated().map { index, sha in
+                .init(title: "Part \(index + 1)", audioUrl: "https://r2.invalid/audio/\(index).mp3", downloadUrl: url(sha), downloadSha256: sha)
+            }
+        )
+    }
 
     func existingFiles(_ hashes: [String]) async throws -> Set<String> {
-        files.intersection(hashes)
+        Set(files.keys).intersection(hashes)
     }
 
     func requestUpload(_ file: PushFile) async throws -> SiteUpload {
-        SiteUpload(url: URL(string: "https://storage.invalid/\(file.sha256)")!, key: "audio/\(file.sha256).x")
+        let folder = file.kind == .image ? "image" : "audio"
+        return SiteUpload(url: URL(string: "https://storage.invalid/\(file.sha256)")!, key: "\(folder)/\(file.sha256).\(file.url.pathExtension)")
     }
 
     func upload(_ file: PushFile, to url: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
@@ -36,15 +73,78 @@ private actor FakeSite: SiteAPI {
     }
 
     func recordFile(_ file: PushFile, key: String) async throws {
-        files.insert(file.sha256)
+        files[file.sha256] = key
     }
 
-    func createEntry(_ entry: SiteEntry) async throws -> String {
+    func createEntry(_ entry: SiteEntry) async throws -> SitePostState {
         if failCreate { throw URLError(.badServerResponse) }
-        if let existing = entries[entry.tapeUuid] { return existing.number }
-        let number = "RA-\(String(format: "%03d", 8 + entries.count))"
-        entries[entry.tapeUuid] = (number, entry)
-        return number
+        if let existing = entries[entry.tapeUuid.lowercased()] { return existing }
+        let state = SitePostState(
+            catalogNumber: "RA-\(String(format: "%03d", 8 + entries.count))",
+            title: entry.title, description: entry.description, medium: entry.medium,
+            whereFound: entry.whereFound, dateFound: entry.dateFound,
+            estimatedRecordingDate: entry.estimatedRecordingDate, updatedAt: tick(),
+            tracks: entry.tracks.map {
+                .init(title: $0.title, description: $0.description, duration: $0.duration,
+                      audioUrl: url($0.audioSha256), downloadUrl: url($0.downloadSha256),
+                      audioSha256: $0.audioSha256, downloadSha256: $0.downloadSha256)
+            },
+            images: entry.images.map { .init(url: url($0.sha256), filename: $0.filename, caption: $0.caption, sha256: $0.sha256) }
+        )
+        entries[entry.tapeUuid.lowercased()] = state
+        return state
+    }
+
+    func fetchEntry(tapeUUID: String, catalogNumber: String?) async throws -> SitePostState {
+        if let entry = entries[tapeUUID.lowercased()] ?? catalogNumber.flatMap({ entries[$0] }) { return entry }
+        throw SiteError.server(status: 404, message: "No post for that tape")
+    }
+
+    func updateEntry(_ update: SiteUpdate) async throws -> SitePostState {
+        updates.append(update)
+        let key = entries[update.tapeUuid.lowercased()] != nil ? update.tapeUuid.lowercased() : (update.catalogNumber ?? "")
+        guard let entry = entries[key] else { throw SiteError.server(status: 404, message: "No post") }
+        guard entry.updatedAt == update.expectedUpdatedAt else { throw SiteError.changedOnSite }
+
+        let fields = update.fields
+        var tracks = entry.tracks
+        for change in update.tracks ?? [] {
+            guard let index = tracks.firstIndex(where: { $0.audioSha256 == change.sha256 || $0.downloadSha256 == change.sha256 }) else {
+                throw SiteError.server(status: 409, message: "Some tracks weren't found on the post")
+            }
+            let old = tracks[index]
+            tracks[index] = .init(
+                title: change.title ?? old.title,
+                description: change.description.map { $0 } ?? old.description,
+                duration: old.duration, audioUrl: old.audioUrl, downloadUrl: old.downloadUrl,
+                audioSha256: old.audioSha256, downloadSha256: old.downloadSha256
+            )
+        }
+        var images = entry.images
+        if let requested = update.images {
+            images = try requested.map { image in
+                if let url = image.url {
+                    guard let existing = entry.images.first(where: { $0.url == url }) else {
+                        throw SiteError.server(status: 409, message: "not on this post")
+                    }
+                    return .init(url: url, filename: existing.filename, caption: image.caption, sha256: existing.sha256)
+                }
+                guard let sha = image.sha256, files[sha] != nil else { throw SiteError.server(status: 409, message: "not uploaded") }
+                return .init(url: url(sha), filename: image.filename, caption: image.caption, sha256: sha)
+            }
+        }
+        let state = SitePostState(
+            catalogNumber: entry.catalogNumber,
+            title: fields?.title ?? entry.title,
+            description: fields?.description.map { $0 } ?? entry.description,
+            medium: fields?.medium ?? entry.medium,
+            whereFound: fields?.whereFound.map { $0 } ?? entry.whereFound,
+            dateFound: fields?.dateFound.map { $0 } ?? entry.dateFound,
+            estimatedRecordingDate: fields?.estimatedRecordingDate.map { $0 } ?? entry.estimatedRecordingDate,
+            published: entry.published, updatedAt: tick(), tracks: tracks, images: images
+        )
+        entries[key] = state
+        return state
     }
 }
 
@@ -168,8 +268,8 @@ private let hasTools = FileManager.default.fileExists(atPath: KnownTools.ffmpeg.
         #expect(stored?.pushedAt != nil)
         let entry = await site.entry(for: stored!.uuid)
         #expect(entry?.medium == "cassette")
-        #expect(entry?.tracks.first?.audioFilename == "01 Test Tape.mp3")
-        #expect(entry?.tracks.first?.downloadFilename == "01 Test Tape.flac")
+        #expect(entry?.tracks.count == 1)
+        #expect(stored?.siteUpdatedAt == entry?.updatedAt)
         #expect(FileManager.default.fileExists(atPath: library.pushFolder(tapeUUID: stored!.uuid).path) == false)
     }
 
@@ -288,6 +388,8 @@ private let hasTools = FileManager.default.fileExists(atPath: KnownTools.ffmpeg.
         #expect(entry.images.map(\.filename) == ["box.png", "label.png"])
         #expect(entry.images.map(\.caption) == ["The box", nil])
         #expect(entry.images.first?.sha256 == box.sha256)
+        let linked = try await library.database.writer.read { try TapeImage.order(Column("position")).fetchAll($0).map(\.siteUrl) }
+        #expect(linked == entry.images.map(\.url), "each photo knows its URL on the site")
     }
 
     @Test(.enabled(if: hasTools)) func theMasterIsNeverChanged() async throws {
@@ -312,7 +414,7 @@ private let hasTools = FileManager.default.fileExists(atPath: KnownTools.ffmpeg.
 
         #expect(result.uploaded == 3)
         let stored = try await fetchTape(tape.tapeID)
-        #expect(await site.entry(for: stored!.uuid)?.transcriptSha256 != nil)
+        #expect(await site.files.count == 3)
     }
 
     @Test(.enabled(if: hasTools)) func deletingATapeRemovesAnUnfinishedPush() async throws {
@@ -510,7 +612,7 @@ private final class StubProtocol: URLProtocol, @unchecked Sendable {
 
     @Test func entriesMatchTheSitesRouteAndLeaveOutEmptyFields() async throws {
         let site = client()
-        StubProtocol.handler = { _ in (201, Data(#"{"id":9,"catalogNumber":"RA-008"}"#.utf8)) }
+        StubProtocol.handler = { _ in (201, Data(Self.entryJSON.utf8)) }
         let entry = SiteEntry(
             tapeUuid: "7D2B34B9-7ADD-4ACF-A048-656302E614FA", title: "T", medium: "cassette",
             description: nil, estimatedRecordingDate: nil,
@@ -518,7 +620,7 @@ private final class StubProtocol: URLProtocol, @unchecked Sendable {
             transcriptSha256: nil, metadata: ["speed": "1⅞ ips"]
         )
 
-        #expect(try await site.createEntry(entry) == "RA-008")
+        #expect(try await site.createEntry(entry).catalogNumber == "RA-008")
 
         let sent = try body(try #require(StubProtocol.requests.first))
         #expect(sent["tapeUuid"] as? String == entry.tapeUuid)
@@ -529,9 +631,70 @@ private final class StubProtocol: URLProtocol, @unchecked Sendable {
 
     @Test func aRepeatPushReadsTheExistingNumber() async throws {
         let site = client()
-        StubProtocol.handler = { _ in (200, Data(#"{"id":9,"catalogNumber":"RA-008","published":false}"#.utf8)) }
+        StubProtocol.handler = { _ in (200, Data(Self.entryJSON.utf8)) }
         let entry = SiteEntry(tapeUuid: "u", title: "T", medium: "cassette", description: nil, estimatedRecordingDate: nil, tracks: [], transcriptSha256: nil, metadata: [:])
-        #expect(try await site.createEntry(entry) == "RA-008")
+        let state = try await site.createEntry(entry)
+        #expect(state.catalogNumber == "RA-008")
+        #expect(state.updatedAt == "2026-11-17T10:00:00.000Z")
+        #expect(state.tracks.first?.downloadSha256 == nil)
+        #expect(state.images.first?.caption == "Lid")
+    }
+
+    static let entryJSON = #"""
+        {"id":9,"catalogNumber":"RA-008","title":"T","description":null,"medium":"cassette","whereFound":null,
+         "dateFound":null,"estimatedRecordingDate":null,"published":false,"updatedAt":"2026-11-17T10:00:00.000Z",
+         "tracks":[{"title":"One","description":null,"duration":2,"audioUrl":"https://r/a.mp3","downloadUrl":null,
+                    "audioSha256":"aa","downloadSha256":null}],
+         "images":[{"url":"https://r/i.jpg","filename":"i.jpg","caption":"Lid","sha256":null}]}
+        """#
+
+    @Test func entriesAreReadByTapeAndNumber() async throws {
+        let site = client()
+        StubProtocol.handler = { _ in (200, Data(Self.entryJSON.utf8)) }
+
+        let state = try await site.fetchEntry(tapeUUID: "7D2B34B9-7ADD-4ACF-A048-656302E614FA", catalogNumber: "RA-008")
+
+        #expect(state.title == "T")
+        let request = try #require(StubProtocol.requests.first)
+        #expect(request.httpMethod == "GET")
+        #expect(request.url?.path == "/api/sync/entry")
+        #expect(request.url?.query?.contains("catalogNumber=RA-008") == true)
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer secret")
+    }
+
+    @Test func updatesSendOnlyWhatChangedAndNullForCleared() async throws {
+        let site = client()
+        StubProtocol.handler = { _ in (200, Data(Self.entryJSON.utf8)) }
+        var fields = SiteChanges.Fields()
+        fields.title = "New"
+        fields.whereFound = .some(nil)
+        var track = SiteChanges.TrackText(sha256: "aa", label: "Track 1")
+        track.description = .some(nil)
+
+        _ = try await site.updateEntry(SiteUpdate(
+            tapeUuid: "u", catalogNumber: "RA-008", expectedUpdatedAt: "t",
+            fields: fields, tracks: [track], images: nil
+        ))
+
+        let sent = try body(try #require(StubProtocol.requests.first))
+        let sentFields = try #require(sent["fields"] as? [String: Any])
+        #expect(sentFields["title"] as? String == "New")
+        #expect(sentFields["whereFound"] is NSNull, "a cleared field is sent as null")
+        #expect(sentFields.keys.contains("description") == false, "an unchanged field is left out")
+        let sentTrack = try #require((sent["tracks"] as? [[String: Any]])?.first)
+        #expect(sentTrack["description"] is NSNull)
+        #expect(sentTrack.keys.contains("title") == false)
+        #expect(sentTrack.keys.contains("label") == false)
+        #expect(sent.keys.contains("images") == false)
+        #expect(sent["expectedUpdatedAt"] as? String == "t")
+    }
+
+    @Test func aStaleUpdateIsReportedAsChangedOnTheSite() async throws {
+        let site = client()
+        StubProtocol.handler = { _ in (409, Data(#"{"error":"This post changed on the site since it was last read. Refresh it first."}"#.utf8)) }
+        await #expect(throws: SiteError.changedOnSite) {
+            try await site.updateEntry(SiteUpdate(tapeUuid: "u", catalogNumber: nil, expectedUpdatedAt: "t", fields: nil, tracks: nil, images: nil))
+        }
     }
 
     @Test func failuresSayWhatWentWrong() async throws {

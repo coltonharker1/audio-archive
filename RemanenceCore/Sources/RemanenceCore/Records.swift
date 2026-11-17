@@ -14,6 +14,10 @@ public struct Tape: Codable, Identifiable, Hashable, Sendable, FetchableRecord, 
     public var description: String?
     public var whereFound: String?
     public var dateFound: String?
+    /// The site's own clock for the post, from the last time the app read or wrote it.
+    public var siteUpdatedAt: String?
+    /// What the site had then, as JSON. See `SiteSnapshot`.
+    public var siteSnapshot: String?
     public var context: String?
     public var machineId: Int64?
     public var speed: String?
@@ -86,6 +90,8 @@ public struct TapeImage: Codable, Identifiable, Hashable, Sendable, FetchableRec
     public var sha256: String
     public var filename: String
     public var caption: String?
+    /// Where the site serves this photo, once it's there.
+    public var siteUrl: String?
 
     public mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID

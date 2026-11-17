@@ -14,6 +14,14 @@ final class PushModel {
     private(set) var progress: PushProgress?
     private(set) var failure: String?
     private(set) var finished: (tapeID: Int64, result: PushResult)?
+    /// A refresh or update of a post already on the site.
+    private(set) var syncingTapeID: Int64?
+    private(set) var syncFailure: String?
+    private(set) var syncNote: String?
+    /// Which tape the note or failure is about.
+    private(set) var lastSyncedTapeID: Int64?
+    /// Goes up after each refresh, so the screen reloads what it's showing.
+    private(set) var refreshes = 0
 
     @ObservationIgnored private let app: AppModel
     @ObservationIgnored private var task: Task<Void, Never>?
@@ -22,7 +30,7 @@ final class PushModel {
         self.app = app
     }
 
-    var isPushing: Bool { pushingTapeID != nil }
+    var isPushing: Bool { pushingTapeID != nil || syncingTapeID != nil }
 
     /// Lets a test point the app somewhere other than the real site.
     var siteURL: URL {
@@ -92,6 +100,60 @@ final class PushModel {
 
     func cancel() {
         task?.cancel()
+    }
+
+    // MARK: Posts already on the site
+
+    func refresh(_ tape: ShelfTape) {
+        sync(tape) { pusher in
+            let result = try await pusher.refresh(tapeID: tape.id)
+            var notes = ["Loaded what the site has now."]
+            if result.unmatchedTracks > 0 {
+                notes.append("\(result.unmatchedTracks) \(result.unmatchedTracks == 1 ? "track" : "tracks") couldn’t be matched to the site’s.")
+            }
+            if !result.photosSkipped.isEmpty {
+                notes.append("\(result.photosSkipped.count) \(result.photosSkipped.count == 1 ? "photo" : "photos") couldn’t be downloaded.")
+            }
+            return notes.joined(separator: " ")
+        }
+    }
+
+    func update(_ tape: ShelfTape) {
+        sync(tape) { [self] pusher in
+            let changes = try await pusher.update(tapeID: tape.id) { update in
+                Task { @MainActor [self] in
+                    guard syncingTapeID == tape.id else { return }
+                    progress = update
+                }
+            }
+            return changes.isEmpty ? "Nothing to send." : "Updated on the site: \(changes.summary.joined(separator: ", "))."
+        }
+    }
+
+    private func sync(_ tape: ShelfTape, _ work: @escaping @Sendable (Pusher) async throws -> String) {
+        guard !isPushing, let library = app.library, let key = SiteCredentials.load() else {
+            if SiteCredentials.load() == nil { syncFailure = "Enter the site’s sync API key first." }
+            return
+        }
+        let pusher = Pusher(library: library, site: SiteClient(baseURL: siteURL, apiKey: key))
+        syncingTapeID = tape.id
+        lastSyncedTapeID = tape.id
+        syncFailure = nil
+        syncNote = nil
+        progress = nil
+        task = Task { [self] in
+            do {
+                let note = try await work(pusher)
+                syncNote = note
+                refreshes += 1
+            } catch is CancellationError {
+            } catch let error as URLError where error.code == .cancelled {
+            } catch {
+                syncFailure = error.localizedDescription
+            }
+            syncingTapeID = nil
+            progress = nil
+        }
     }
 
     private func finish(tapeID: Int64, result: PushResult) {

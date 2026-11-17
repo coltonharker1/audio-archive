@@ -24,22 +24,28 @@ struct SitePostView: View {
     @State private var saveTask: Task<Void, Never>?
     @State private var isDropTargeted = false
 
+    @State private var confirmingRefresh = false
+
     private var push: PushModel { model.pushModel }
     private var isOnSite: Bool { tape.tape.pushedAt != nil }
+    /// A post on the site that the app hasn't read yet can't be edited, or a later
+    /// update would be worked out against nothing.
+    private var needsRefresh: Bool { isOnSite && post?.tape.siteSnapshot == nil }
+    private var changes: SiteChanges? { post.flatMap(Pusher.changes(for:)) }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 header
                 if let post, fields != nil {
-                    if isOnSite { onSiteNote }
+                    if isOnSite { siteSection }
                     Group {
                         details
                         descriptionSection(post)
                         photos(post)
                         tracks(post)
                     }
-                    .disabled(isOnSite)
+                    .disabled(needsRefresh || push.syncingTapeID == tape.id)
                     if !isOnSite { pushSection }
                 } else {
                     ProgressView().frame(maxWidth: .infinity)
@@ -53,6 +59,26 @@ struct SitePostView: View {
         .task(id: tape.id) { await observe() }
         .task(id: tape.tape.approvedAt) { await push.load(tape) }
         .onDisappear { saveNow() }
+        .onChange(of: push.refreshes) { _, _ in reloadDrafts() }
+        .confirmationDialog("Replace what’s written here with what the site has?", isPresented: $confirmingRefresh) {
+            Button("Refresh from Site", role: .destructive) { push.refresh(tape) }
+        } message: {
+            Text("Changes here that haven’t been sent to the site will be lost.")
+        }
+    }
+
+    /// After a refresh, the fields show what was loaded rather than the old draft.
+    private func reloadDrafts() {
+        saveTask?.cancel()
+        fields = nil
+        savedFields = nil
+        trackText = [:]
+        trackNames = [:]
+        captions = [:]
+        savedText = [:]
+        savedNames = [:]
+        savedCaptions = [:]
+        Task { await observe() }
     }
 
     // MARK: Loading and saving
@@ -98,7 +124,7 @@ struct SitePostView: View {
     }
 
     private func saveNow() {
-        guard let library = model.library, let fields, let post, !isOnSite else { return }
+        guard let library = model.library, let fields, let post, !needsRefresh else { return }
         let tapeID = tape.id
         let fieldsChanged = fields != savedFields
         let tracks = post.tracks.compactMap { track -> (PostTrack, name: String?, text: String?)? in
@@ -158,11 +184,85 @@ struct SitePostView: View {
         }
     }
 
-    private var onSiteNote: some View {
-        Text("This tape is already on the site. Changes made here don’t reach it yet, so edit it in the site’s admin for now.")
-            .font(.callout)
-            .foregroundStyle(Theme.inkMuted)
-            .lineLimit(3)
+    @ViewBuilder private var siteSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let snapshot = post.flatMap({ SiteSnapshot.decode($0.tape.siteSnapshot) }) {
+                Text(snapshot.published ? "Published on the site." : "On the site, not published yet.")
+                    .font(.callout)
+                    .foregroundStyle(Theme.inkMuted)
+            }
+            if needsRefresh {
+                Text("Refresh from the site to load what it has now, including anything changed in its admin. Then edit here and send the changes with Update on Site.")
+                    .font(.callout)
+                    .foregroundStyle(Theme.inkMuted)
+                    .lineLimit(3)
+            } else if let changes {
+                if changes.isEmpty {
+                    Text("Matches the site.")
+                        .font(.callout)
+                        .foregroundStyle(Theme.good)
+                } else {
+                    Text("To send: \(changes.summary.joined(separator: ", "))")
+                        .font(.callout)
+                        .foregroundStyle(Theme.ink)
+                        .lineLimit(3)
+                }
+                ForEach(changes.notSent, id: \.self) { note in
+                    Text(note)
+                        .font(.caption)
+                        .foregroundStyle(Theme.attention)
+                        .lineLimit(3)
+                }
+            }
+            if push.syncingTapeID == tape.id {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(progressLabel)
+                        .font(.callout)
+                        .lineLimit(1)
+                }
+            } else {
+                if push.lastSyncedTapeID != tape.id {
+                    EmptyView()
+                } else if let failure = push.syncFailure {
+                    Text(failure)
+                        .foregroundStyle(Theme.attention)
+                        .lineLimit(4)
+                } else if let note = push.syncNote {
+                    Text(note)
+                        .font(.callout)
+                        .foregroundStyle(Theme.inkMuted)
+                        .lineLimit(3)
+                }
+                if !push.hasKey {
+                    keyEntry
+                } else {
+                    HStack {
+                        if !needsRefresh {
+                            Button("Update on Site", systemImage: "arrow.up.circle") {
+                                saveNow()
+                                Task {
+                                    try? await Task.sleep(for: .milliseconds(300))
+                                    push.update(tape)
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Theme.accent)
+                            .disabled(changes?.isEmpty != false || push.isPushing)
+                            .fixedSize()
+                        }
+                        Button("Refresh from Site", systemImage: "arrow.down.circle") {
+                            if changes?.isEmpty == false { confirmingRefresh = true } else { push.refresh(tape) }
+                        }
+                        .disabled(push.isPushing)
+                        .fixedSize()
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.card, in: .rect(cornerRadius: 10))
     }
 
     private var details: some View {
@@ -287,7 +387,7 @@ struct SitePostView: View {
 
     private func tracks(_ post: SitePost) -> some View {
         field(post.tracks.count == 1 ? "Track" : "Tracks") {
-            Text("The site stores what’s written for each track, but doesn’t show it on its pages yet.")
+            Text("Each track’s description shows under its title in the site’s player.")
                 .font(.caption)
                 .foregroundStyle(Theme.inkMuted)
                 .lineLimit(2)
@@ -444,8 +544,8 @@ struct SitePostView: View {
         case .preparing(let track, let total): "Cutting track \(track) of \(total)…"
         case .checking: "Checking what the site already has…"
         case .uploading(let file, let total, let fraction): "Uploading file \(file) of \(total), \(Int(fraction * 100))%"
-        case .creating: "Creating the post…"
-        case nil: "Starting…"
+        case .creating: isOnSite ? "Updating the post…" : "Creating the post…"
+        case nil: isOnSite ? "Talking to the site…" : "Starting…"
         }
     }
 
@@ -461,7 +561,7 @@ struct SitePostView: View {
     }
 
     private func addPhotos(_ urls: [URL]) {
-        guard let library = model.library, !isOnSite else { return }
+        guard let library = model.library, !needsRefresh else { return }
         let tapeID = tape.id
         Task.detached {
             for url in urls {
