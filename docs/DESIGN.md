@@ -1,7 +1,9 @@
 # audio-archive — Design Document
 
-> **Historical record of the old Go app.** Its session notes are out of date. For
-> current work, see [native-app-plan.md](native-app-plan.md).
+> **Historical record of the old Go app,** which was replaced by Remanence and removed
+> from this repo in November 2026. The paths below no longer exist; the code is in git
+> history up to commit `9c9d587`. For current work, see
+> [native-app-plan.md](native-app-plan.md).
 
 > This document explains **what the project is, why it exists, how it thinks
 > about hard problems, and what's currently solid vs. known-flaky**. For how

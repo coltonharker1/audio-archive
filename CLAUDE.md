@@ -1,8 +1,8 @@
 # Remanence
 
 A native macOS app for recording, transcribing, reviewing and publishing digitized
-tapes. It's replacing the old Go CLI, launchd daemons and Next.js review app, which
-still live in this repo until Phase 7.
+tapes. It replaced an earlier Go CLI and Next.js review app, which were removed from
+this repo in Phase 7 and remain in git history.
 
 **Picking this up? Read the "Current status" section of
 [docs/native-app-plan.md](docs/native-app-plan.md) first.** It says exactly where
@@ -17,8 +17,7 @@ things stand and what to do next.
 | `project.yml` | Generates `Remanence.xcodeproj` and `Remanence/Info.plist` |
 | `scripts/dev/` | Helpers for testing the running app without disturbing the user |
 | `docs/native-app-plan.md` | Decisions, status, phases, lessons and site API changes |
-| `cmd/`, `internal/`, `web/`, `Makefile`, `go.*`, `scripts/launchd/` | The old app, kept for reference until Phase 7 |
-| `docs/DESIGN.md` | History of the old app. Its session notes are out of date. |
+| `docs/DESIGN.md` | History of the old Go app. Its paths and session notes are out of date. |
 
 ## Commands
 
@@ -55,7 +54,8 @@ open -g .build/xcode/Build/Products/Debug/Remanence.app
 **Protect the audio**
 - Masters are read-only and irreplaceable. Nothing modifies them, and a recording
   must always save, whatever else goes wrong.
-- Never run the old `archive sync`. It can overwrite live site entries.
+- Never restore or run the old Go app's `archive sync` from git history. It can
+  overwrite live site entries.
 - Deploying the site or changing its production database needs the user's
   confirmation each time.
 

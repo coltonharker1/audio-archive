@@ -17,7 +17,7 @@ Written 2026-11-02. Mockups: https://claude.ai/artifact/Vec7wX1cEPYiuFKDuKfzE9
 | 4. Review | Done, committed (`997a3cd`) |
 | **5. Recording** | **Committed and tested live on the MacBook mic. Needs the Scarlett to finish.** |
 | 6. Push to the site | **Live on 2026-11-17.** Push, update and refresh all tested against the real site. Untried by hand. |
-| 7. Retire the old code | Not started |
+| 7. Retire the old code | Done (2026-11-19) |
 
 ### Next steps
 
@@ -94,8 +94,6 @@ the window can be on screen.
 - A crash or force-quit while the record screen is open leaves the input at 96 kHz,
   because the old rate is only restored on a normal stop. Recording still works, and
   Audio MIDI Setup can put it back.
-- `web/` and the Go code still exist, and `README.md` describes the old app until
-  Phase 7.
 
 ### Library state
 
@@ -250,9 +248,11 @@ are untouched.
 
 ### 7. Retire the old code
 
-Once the app does everything you use, remove `cmd/`, `internal/`, `web/`,
-`scripts/launchd/`, `go.mod`, `go.sum` and the Makefile, and rewrite the README. `docs/DESIGN.md`
-becomes a historical record. Git keeps the old code.
+**Done 2026-11-19.** Removed `cmd/`, `internal/`, `web/`, `scripts/launchd/`,
+`go.mod`, `go.sum`, the Makefile and `docs/remanence-integration.md` (the old sync's
+design), and rewrote the README. Nothing of the old app was installed or running on
+this Mac. `docs/DESIGN.md` stays as a historical record. The last commit with the old
+code is `9c9d587`.
 
 ## Site API changes
 
@@ -305,7 +305,7 @@ your confirmation at the time.
 | `AVAudioEngine` keeps the first rate it sees for the life of the app, so a 96 kHz device was saved at 48 kHz, even with a new engine | Nov 3 live test | The HAL unit reads the real rate. Check the saved file's rate, not just the device's |
 | Virtual inputs and in-use devices | Nov 3 mic test | Real hardware first, and never change the rate of a device another app is using |
 
-Port as-is: the prep filter chain (`internal/audio/prep.go`), summary prompts
+Ported, and now only in git history since Phase 7: the prep filter chain (`internal/audio/prep.go`), summary prompts
 (`internal/summarize/prompts.go`), the recording types (`types.go`) and summary
 normalization.
 
