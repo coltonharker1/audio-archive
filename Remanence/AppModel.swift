@@ -4,37 +4,15 @@ import Observation
 import RemanenceCore
 import ServiceManagement
 
-enum ShelfFilter: String, CaseIterable, Identifiable {
-    case all = "Shelf"
-    case review = "Ready to Review"
-    case progress = "In Progress"
-    case site = "On the Site"
-
-    var id: String { rawValue }
-
-    func includes(_ tape: ShelfTape) -> Bool {
-        switch self {
-        case .all:
-            return true
-        case .review:
-            return tape.tape.pushedAt == nil && tape.tape.approvedAt == nil && tape.status == .idle
-        case .progress:
-            if case .failed = tape.status { return true }
-            return tape.status.isActive
-        case .site:
-            return tape.tape.pushedAt != nil
-        }
-    }
-}
-
-/// What the sidebar has chosen: one of the shelf's filters, or a collection.
+/// What the sidebar offers, and so what it can highlight.
 enum SidebarItem: Hashable {
-    case filter(ShelfFilter)
+    case recording, shelf, catalog, sitePosts
     case collection(Int64)
+    case setup
 }
 
 enum Route: Equatable {
-    case shelf, search, readAlong, review, record, post, edit
+    case shelf, search, readAlong, review, record, post, edit, catalog, sitePosts, setup
 }
 
 @MainActor
@@ -43,6 +21,8 @@ final class AppModel {
     static let shared = AppModel()
 
     let paths: LibraryPaths
+    /// Whether `-libraryPath` pointed this launch away from the real library.
+    let usesScratchLibrary: Bool
     let requirements: [Requirement]
     let player = AudioPlayer()
 
@@ -60,26 +40,35 @@ final class AppModel {
     private(set) var importProgress: ImportProgress?
     private(set) var jobProgress: [Int64: Double] = [:]
     private(set) var opensAtLogin = SMAppService.mainApp.status == .enabled
-    private(set) var route = Route.shelf
+    private(set) var route = Route.shelf {
+        didSet { if route != oldValue { footerNote = nil } }
+    }
+    /// What the screen showing wants said in the footer. Nil leaves the summary of
+    /// background work there. It's cleared on the way to another screen.
+    var footerNote: String?
     private(set) var searchResults: [SearchTapeResult] = []
     private(set) var isSearching = false
     var searchRequested = false
     var editingLineID: Int64?
     var isComparingTranscripts = false
+    /// The shelf's chosen tab.
     var filter = ShelfFilter.all {
         didSet { if route != .shelf { leaveToShelf() } }
     }
     private(set) var collections: [ShelfCollection] = []
     /// Every RA number the site is using, so new tapes never take one of them.
     var siteNumbers: Set<String> = []
-    /// The collection shown instead of a filter, if one is chosen in the sidebar.
-    private(set) var selectedCollectionID: Int64?
+    /// The collection shown instead of the shelf, if one is chosen in the sidebar.
+    private(set) var selectedCollectionID: Int64? {
+        didSet { if selectedCollectionID != oldValue { footerNote = nil } }
+    }
     var message: String?
     var searchText = "" {
         didSet { if searchText != oldValue { runSearch() } }
     }
 
     @ObservationIgnored private var routeBeforeReadAlong = Route.shelf
+    @ObservationIgnored private var routeBeforeSearch = Route.shelf
     @ObservationIgnored private(set) lazy var reviewModel = ReviewModel(app: self)
     @ObservationIgnored private(set) lazy var recordModel = RecordModel(app: self)
     @ObservationIgnored private(set) lazy var pushModel = PushModel(app: self)
@@ -95,6 +84,7 @@ final class AppModel {
             paths = LibraryPaths(library: folder, support: paths.support)
         }
         self.paths = paths
+        if case .scratch = choice { usesScratchLibrary = true } else { usesScratchLibrary = false }
         requirements = SetupCatalog.requirements(paths: paths)
         if case .unusable = choice {
             // Asking for a scratch library must never open the real one instead.
@@ -143,15 +133,36 @@ final class AppModel {
     }
 
     var sidebarSelection: SidebarItem {
-        get { selectedCollectionID.map(SidebarItem.collection) ?? .filter(filter) }
+        get {
+            switch route {
+            case .record: .recording
+            case .catalog: .catalog
+            case .sitePosts: .sitePosts
+            case .setup: .setup
+            // Search and a tape's screens belong to the shelf or the collection.
+            case .shelf, .search, .readAlong, .review, .post, .edit:
+                selectedCollectionID.map(SidebarItem.collection) ?? .shelf
+            }
+        }
         set {
             switch newValue {
-            case .filter(let chosen):
+            case .recording:
+                // Choosing it again mustn't undo the collection picked on that screen.
+                guard route != .record else { return }
+                openRecording()
+                if route == .record { searchText = "" }
+            case .shelf:
                 selectedCollectionID = nil
-                filter = chosen
+                leaveToShelf()
             case .collection(let id):
                 selectedCollectionID = id
-                if route != .shelf { leaveToShelf() }
+                leaveToShelf()
+            case .catalog:
+                leave(to: .catalog)
+            case .sitePosts:
+                leave(to: .sitePosts)
+            case .setup:
+                leave(to: .setup)
             }
         }
     }
@@ -426,6 +437,13 @@ final class AppModel {
         searchText = ""
     }
 
+    /// Goes to a library-wide screen, which no collection is part of.
+    private func leave(to destination: Route) {
+        selectedCollectionID = nil
+        route = destination
+        searchText = ""
+    }
+
     /// Changes track without starting playback.
     func choose(itemAt index: Int) {
         selectedItemIndex = index
@@ -483,10 +501,13 @@ final class AppModel {
         guard !query.isEmpty else {
             searchResults = []
             isSearching = false
-            if route == .search { route = .shelf }
+            if route == .search { route = routeAfterSearch }
             return
         }
-        if route != .search { route = .search }
+        if route != .search {
+            routeBeforeSearch = route
+            route = .search
+        }
         isSearching = true
 
         guard let library else { return }
@@ -503,6 +524,15 @@ final class AppModel {
                 message = "Search didn’t work. \(error.localizedDescription)"
             }
             isSearching = false
+        }
+    }
+
+    /// Where clearing the search goes. The recorder and a tape's screens aren't
+    /// reopened, so those lead to the shelf or the collection.
+    private var routeAfterSearch: Route {
+        switch routeBeforeSearch {
+        case .catalog, .sitePosts, .setup: routeBeforeSearch
+        case .shelf, .search, .readAlong, .review, .record, .post, .edit: .shelf
         }
     }
 

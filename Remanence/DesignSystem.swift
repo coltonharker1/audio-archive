@@ -17,6 +17,7 @@ enum Theme {
     static let railSelected = Color(hex: 0xdbd3c6)
     static let bar = Color(hex: 0xf4eee5)
     static let footer = Color(hex: 0xf2ece2)
+    static let crumbSeparator = Color(hex: 0xa79c8b)
 
     // Grouped areas.
     static let hero = Color(hex: 0xeae2d4)

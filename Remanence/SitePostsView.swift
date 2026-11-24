@@ -4,7 +4,6 @@ import SwiftUI
 /// Every post on the site, with the ones not in this library ready to bring in.
 struct SitePostsView: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
 
     private var push: PushModel { model.pushModel }
     private var listing: [SiteListing] { push.siteListing ?? [] }
@@ -56,18 +55,14 @@ struct SitePostsView: View {
             }
 
             Divider()
-            HStack {
-                Text("Bringing a post in downloads its original audio and photos, so it can be edited here.")
-                    .font(.caption)
-                    .foregroundStyle(Theme.inkMuted)
-                    .lineLimit(2)
-                Spacer()
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
-            }
-            .padding(14)
+            Text("Bringing a post in downloads its original audio and photos, so it can be edited here.")
+                .font(.caption)
+                .foregroundStyle(Theme.inkMuted)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(14)
         }
-        .frame(width: 600, height: 520)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.paper)
         .task { await push.loadListing() }
     }
@@ -115,7 +110,6 @@ struct SitePostsView: View {
         if let tapeID = item.tapeID {
             Button("Open") {
                 if let tape = model.shelf.first(where: { $0.id == tapeID }) {
-                    dismiss()
                     model.openPost(tape)
                 }
             }

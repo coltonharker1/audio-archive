@@ -5,7 +5,6 @@ import SwiftUI
 /// reel to a new place, or type a number. Nothing changes until Apply.
 struct CatalogView: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
 
     /// The numbers as they'll be after Apply, by tape.
     @State private var staged: [Int64: String] = [:]
@@ -43,7 +42,7 @@ struct CatalogView: View {
             Divider()
             footer
         }
-        .frame(minWidth: 720, minHeight: 520)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.paper)
         .task {
             reset()
@@ -74,8 +73,6 @@ struct CatalogView: View {
                     .lineLimit(2)
             }
             Spacer()
-            Button("Done") { dismiss() }
-                .keyboardShortcut(.cancelAction)
         }
         .padding(20)
     }
@@ -141,12 +138,14 @@ struct CatalogView: View {
             Spacer()
             if isApplying { ProgressView().controlSize(.small) }
             Button("Revert") { reset() }
+                .fixedSize()
                 .disabled(changes.isEmpty || isApplying)
             Button("Apply") {
                 commitAllTyping()
                 if !changes.isEmpty { confirming = true }
             }
             .keyboardShortcut(.defaultAction)
+            .fixedSize()
             .disabled((changes.isEmpty && typing.isEmpty) || isApplying)
         }
         .padding(16)
@@ -254,6 +253,8 @@ struct CatalogView: View {
                 model.message = changes.count == 1 ? "Renumbered 1 reel. Relabel its box." : "Renumbered \(changes.count) reels. Relabel their boxes."
             } catch {
                 failure = error.localizedDescription
+                // Gone to another screen meanwhile, so it's said where it'll be seen.
+                if model.route != .catalog { model.message = error.localizedDescription }
             }
             isApplying = false
         }

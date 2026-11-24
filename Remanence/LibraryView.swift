@@ -4,60 +4,41 @@ import SwiftUI
 struct LibraryView: View {
     @Environment(AppModel.self) private var model
     @State private var isDropTargeted = false
-    @State private var showsSitePosts = false
-    @State private var showsCatalog = false
-    @State private var namingCollection = false
-    @State private var newCollectionName = ""
     @FocusState private var isSearchFocused: Bool
 
     var body: some View {
         @Bindable var model = model
 
+        VStack(spacing: 0) {
+            // Search stays on the split view itself, which owns the toolbar it sits in.
+            splitView
+                .searchable(text: $model.searchText, placement: .toolbar, prompt: "Search every word on every tape")
+                .searchFocused($isSearchFocused)
+            StatusBar()
+        }
+        .onChange(of: model.searchRequested) { _, requested in
+            if requested {
+                isSearchFocused = true
+                model.searchRequested = false
+            }
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            Task { await model.add(urls) }
+            return !urls.isEmpty
+        } isTargeted: { targeted in
+            isDropTargeted = targeted
+        }
+        .overlay {
+            if isDropTargeted {
+                DropOverlay()
+            }
+        }
+    }
+
+    private var splitView: some View {
         NavigationSplitView {
-            List(selection: Binding(
-                get: { model.sidebarSelection },
-                set: { if let item = $0 { model.sidebarSelection = item } }
-            )) {
-                Section("Library") {
-                    ForEach(ShelfFilter.allCases) { filter in
-                        HStack {
-                            Text(filter.rawValue)
-                            Spacer()
-                            Text("\(model.shelf.filter(filter.includes).count)")
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                        }
-                        .tag(SidebarItem.filter(filter))
-                    }
-                }
-                Section("Collections") {
-                    ForEach(model.collections) { collection in
-                        CollectionSidebarRow(collection: collection)
-                            .tag(SidebarItem.collection(collection.id))
-                    }
-                    Button {
-                        newCollectionName = ""
-                        namingCollection = true
-                    } label: {
-                        Label("New Collection", systemImage: "plus")
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.secondary)
-                }
-            }
-            .listStyle(.sidebar)
-            .alert("New Collection", isPresented: $namingCollection) {
-                TextField("The Cable Man", text: $newCollectionName)
-                Button("Create") {
-                    let name = newCollectionName
-                    Task { await model.createCollection(named: name) }
-                }
-                .disabled(newCollectionName.trimmingCharacters(in: .whitespaces).isEmpty)
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Reels that came in the same box. Name it whatever you like.")
-            }
-            .navigationSplitViewColumnWidth(min: 210, ideal: 220, max: 280)
+            Sidebar()
+                .navigationSplitViewColumnWidth(min: 210, ideal: 220, max: 280)
         } detail: {
             VStack(spacing: 0) {
                 if model.importProgress != nil {
@@ -84,6 +65,12 @@ struct LibraryView: View {
                     }
                 case .search:
                     SearchResultsView()
+                case .catalog:
+                    CatalogView()
+                case .sitePosts:
+                    SitePostsView()
+                case .setup:
+                    SetupView()
                 case .shelf:
                     if let collection = model.selectedCollection {
                         CollectionView(collection: collection)
@@ -98,44 +85,215 @@ struct LibraryView: View {
                     }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.paper)
+            .toolbar {
+                ToolbarItem(placement: .navigation) {
+                    Breadcrumb()
+                }
+                .sharedBackgroundVisibility(.hidden)
+            }
+            // The breadcrumb says where this is, in place of the window's title.
+            .toolbar(removing: .title)
+            .toolbarBackground(Theme.bar, for: .windowToolbar)
         }
-        .toolbar {
-            if model.route == .shelf {
-                ToolbarItem(placement: .primaryAction) {
-                    Button("Catalog", systemImage: "number") { showsCatalog = true }
+    }
+}
+
+/// Where the screen showing sits, such as "Library / Catalog".
+private struct Breadcrumb: View {
+    @Environment(AppModel.self) private var model
+
+    private var crumbs: [String] {
+        switch model.route {
+        case .shelf:
+            if let collection = model.selectedCollection {
+                ["Collections", collection.collection.name]
+            } else {
+                ["Library", "Shelf"]
+            }
+        case .search: ["Library", "Search"]
+        case .catalog: ["Library", "Catalog"]
+        case .sitePosts: ["Library", "Site Posts"]
+        case .setup: ["Setup"]
+        // Leaving the recorder goes back to the collection it was opened from.
+        case .record: [model.selectedCollection?.collection.name ?? "Shelf", "Recording"]
+        case .review: tapeCrumbs("Review")
+        case .edit: tapeCrumbs("Edit")
+        case .readAlong: tapeCrumbs("Read Along")
+        case .post: tapeCrumbs("Site Post")
+        }
+    }
+
+    /// The first crumb is where Back goes from a tape's screen.
+    private func tapeCrumbs(_ screen: String) -> [String] {
+        var origin = model.backLabel
+        if origin != "Results", let collection = model.selectedCollection {
+            origin = collection.collection.name
+        }
+        let tape = model.selectedTape.map { $0.tape.catalogNumber ?? $0.tape.title }
+        return [origin, tape, screen].compactMap(\.self)
+    }
+
+    /// Long names are cut here, since a toolbar item takes whatever width it asks for.
+    private func shortened(_ name: String) -> String {
+        name.count > 24 ? name.prefix(23).trimmingCharacters(in: .whitespaces) + "…" : name
+    }
+
+    var body: some View {
+        let crumbs = crumbs
+        HStack(spacing: 10) {
+            ForEach(Array(crumbs.enumerated()), id: \.offset) { index, crumb in
+                let isHere = index == crumbs.count - 1
+                if index > 0 {
+                    Text("/")
+                        .foregroundStyle(Theme.crumbSeparator)
+                        .accessibilityHidden(true)
+                }
+                Text(shortened(crumb))
+                    .fontWeight(isHere ? .semibold : .regular)
+                    .foregroundStyle(isHere ? Theme.ink : Theme.muted)
+                    .help(crumb)
+                    .accessibilityLabel(crumb)
+            }
+        }
+        .font(.system(size: 13))
+        .lineLimit(1)
+        .fixedSize()
+        .padding(.horizontal, 6)
+    }
+}
+
+/// Every place in the app, with the collections among them and Setup at the foot.
+private struct Sidebar: View {
+    @Environment(AppModel.self) private var model
+    @State private var namingCollection = false
+    @State private var newCollectionName = ""
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Remanence")
+                        .font(Theme.serif(29))
+                        .tracking(-1.2)
+                        .foregroundStyle(Theme.ink)
+                        .fixedSize()
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 14)
+                        .accessibilityAddTraits(.isHeader)
+
+                    SidebarRow(title: "Recording", icon: "record.circle", item: .recording)
+
+                    heading("Library")
+                    SidebarRow(title: "Shelf", icon: "books.vertical", item: .shelf)
+                    SidebarRow(title: "Catalog", icon: "number", item: .catalog)
                         .help("Every reel by RA number, to match the labels on the boxes")
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    Button("Site Posts", systemImage: "globe") { showsSitePosts = true }
+                    SidebarRow(title: "Site Posts", icon: "globe", item: .sitePosts)
                         .help("Every post on the site")
+
+                    heading("Collections")
+                    ForEach(model.collections) { collection in
+                        CollectionSidebarRow(collection: collection)
+                    }
+                    Button {
+                        newCollectionName = ""
+                        namingCollection = true
+                    } label: {
+                        SidebarLabel(title: "New collection…", icon: "plus")
+                            .foregroundStyle(Theme.muted)
+                    }
+                    .buttonStyle(.plain)
                 }
-                ToolbarItem(placement: .primaryAction) {
-                    Button("Record a Tape", systemImage: "record.circle") { model.openRecording() }
+                .padding(12)
+            }
+
+            HairlineRule()
+                .padding(.horizontal, 12)
+            SidebarRow(title: "Setup", icon: "slider.horizontal.3", item: .setup)
+                .padding(12)
+        }
+        .background(Theme.rail.ignoresSafeArea())
+        .alert("New Collection", isPresented: $namingCollection) {
+            TextField("The Cable Man", text: $newCollectionName)
+            Button("Create") {
+                let name = newCollectionName
+                Task { await model.createCollection(named: name) }
+            }
+            .disabled(newCollectionName.trimmingCharacters(in: .whitespaces).isEmpty)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Reels that came in the same box. Name it whatever you like.")
+        }
+    }
+
+    private func heading(_ title: String) -> some View {
+        CapLabel(title)
+            .padding(.horizontal, 10)
+            .padding(.top, 20)
+            .padding(.bottom, 6)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// One of the app's fixed destinations.
+private struct SidebarRow: View {
+    @Environment(AppModel.self) private var model
+
+    let title: String
+    let icon: String
+    let item: SidebarItem
+
+    var body: some View {
+        let isSelected = model.sidebarSelection == item
+        let showsRecordingDot = item == .recording && model.recordModel.isRecording
+        Button {
+            model.sidebarSelection = item
+        } label: {
+            SidebarLabel(title: title, icon: icon, isSelected: isSelected) {
+                if showsRecordingDot {
+                    Circle()
+                        .fill(Theme.needle)
+                        .frame(width: 8, height: 8)
+                        .accessibilityLabel("Recording now")
                 }
             }
+            .foregroundStyle(Theme.ink)
         }
-        .sheet(isPresented: $showsSitePosts) { SitePostsView() }
-        .sheet(isPresented: $showsCatalog) { CatalogView() }
-        .searchable(text: $model.searchText, placement: .toolbar, prompt: "Search every word on every tape")
-        .searchFocused($isSearchFocused)
-        .onChange(of: model.searchRequested) { _, requested in
-            if requested {
-                isSearchFocused = true
-                model.searchRequested = false
-            }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+/// The face of a sidebar row: an icon, a name and anything that trails it.
+private struct SidebarLabel<Trailing: View>: View {
+    let title: String
+    let icon: String
+    var isSelected = false
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .frame(width: 18)
+                .accessibilityHidden(true)
+            Text(title)
+                .fontWeight(isSelected ? .semibold : .regular)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            trailing
         }
-        .dropDestination(for: URL.self) { urls, _ in
-            Task { await model.add(urls) }
-            return !urls.isEmpty
-        } isTargeted: { targeted in
-            isDropTargeted = targeted
-        }
-        .overlay {
-            if isDropTargeted {
-                DropOverlay()
-            }
-        }
+        .font(.system(size: 14))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(isSelected ? Theme.railSelected : .clear, in: .rect(cornerRadius: 6))
+        .contentShape(.rect(cornerRadius: 6))
+    }
+}
+
+extension SidebarLabel where Trailing == EmptyView {
+    init(title: String, icon: String) {
+        self.init(title: title, icon: icon) { EmptyView() }
     }
 }
 
@@ -147,16 +305,27 @@ private struct CollectionSidebarRow: View {
     let collection: ShelfCollection
 
     var body: some View {
-        HStack {
-            Label(collection.collection.name, systemImage: "shippingbox")
-                .lineLimit(1)
-            Spacer()
-            Text("\(collection.tapeIDs.count)")
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.secondary)
+        let item = SidebarItem.collection(collection.id)
+        let isSelected = model.sidebarSelection == item
+        Button {
+            model.sidebarSelection = item
+        } label: {
+            SidebarLabel(title: collection.collection.name, icon: "folder", isSelected: isSelected) {
+                Text("\(collection.tapeIDs.count)")
+                    .font(Theme.mono(11))
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize()
+            }
+            .foregroundStyle(Theme.ink)
         }
-        .padding(.vertical, 1)
-        .background(isTargeted ? Theme.accent.opacity(0.25) : .clear, in: .rect(cornerRadius: 5))
+        .buttonStyle(.plain)
+        .help(collection.collection.name)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isTargeted ? Theme.accent.opacity(0.25) : .clear)
+                .allowsHitTesting(false)
+        }
         .dropDestination(for: String.self) { items, _ in
             let ids = items.compactMap(TapeDrag.tapeID)
             let tapes = model.shelf.filter { ids.contains($0.id) }

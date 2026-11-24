@@ -25,7 +25,7 @@ struct ShelfView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 30) {
                 HStack(alignment: .firstTextBaseline, spacing: 14) {
-                    Text(model.filter.rawValue)
+                    Text("Shelf")
                         .font(Theme.display(44))
                         .foregroundStyle(Theme.ink)
                     Text(summary)
@@ -33,6 +33,9 @@ struct ShelfView: View {
                         .foregroundStyle(Theme.inkMuted)
                 }
                 .padding(.horizontal, 32)
+
+                ShelfTabs()
+                    .padding(.horizontal, 32)
 
                 if tapes.isEmpty {
                     Text("Nothing here yet.")
@@ -50,6 +53,51 @@ struct ShelfView: View {
             .padding(.top, 20)
             .padding(.bottom, 32)
         }
+    }
+}
+
+/// The shelf's four filters, each with how many tapes it shows.
+private struct ShelfTabs: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 22) {
+                ForEach(ShelfFilter.allCases) { filter in
+                    tab(filter)
+                }
+                Spacer(minLength: 0)
+            }
+            HairlineRule()
+        }
+    }
+
+    private func tab(_ filter: ShelfFilter) -> some View {
+        let isSelected = model.filter == filter
+        let count = model.shelf.filter(filter.includes).count
+        return Button {
+            model.filter = filter
+        } label: {
+            HStack(spacing: 7) {
+                Text(filter.label)
+                Text("\(count)")
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.muted)
+            }
+            .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+            .foregroundStyle(Theme.ink)
+            .fixedSize()
+            .padding(.top, 9)
+            .padding(.bottom, 11)
+            .overlay(alignment: .bottom) {
+                if isSelected {
+                    Rectangle().fill(Theme.ink).frame(height: 2)
+                }
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
