@@ -42,7 +42,7 @@ enum Route: Equatable {
 final class AppModel {
     static let shared = AppModel()
 
-    let paths = LibraryPaths.standard
+    let paths: LibraryPaths
     let requirements: [Requirement]
     let player = AudioPlayer()
 
@@ -89,14 +89,41 @@ final class AppModel {
     @ObservationIgnored private var isObservingShelf = false
 
     private init() {
+        let choice = Self.libraryChoice()
+        var paths = LibraryPaths.standard
+        if case .scratch(let folder) = choice {
+            paths = LibraryPaths(library: folder, support: paths.support)
+        }
+        self.paths = paths
         requirements = SetupCatalog.requirements(paths: paths)
-        do {
-            try paths.createDirectories()
-            database = try AppDatabase.open(at: paths.database)
-        } catch {
-            databaseError = error.localizedDescription
+        if case .unusable = choice {
+            // Asking for a scratch library must never open the real one instead.
+            databaseError = "-libraryPath needs the full path of a folder."
+        } else {
+            do {
+                try paths.createDirectories()
+                database = try AppDatabase.open(at: paths.database)
+            } catch {
+                databaseError = error.localizedDescription
+            }
         }
         player.onFinished = { [weak self] in self?.playNextItem() }
+    }
+
+    private enum LibraryChoice {
+        case standard
+        case scratch(URL)
+        case unusable
+    }
+
+    /// `-libraryPath <folder>` at launch opens a scratch library, for trying things
+    /// without touching the real one. Only the launch arguments are read, so a saved
+    /// default can never move a normal launch elsewhere. Models stay where they are.
+    private static func libraryChoice() -> LibraryChoice {
+        guard CommandLine.arguments.contains("-libraryPath") else { return .standard }
+        let arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        guard let path = arguments["libraryPath"] as? String, path.hasPrefix("/") else { return .unusable }
+        return .scratch(URL(filePath: path, directoryHint: .isDirectory))
     }
 
     var isReady: Bool {
