@@ -28,7 +28,7 @@ struct ReadAlongView: View {
                 .padding(.horizontal, 32)
                 .padding(.vertical, 12)
 
-            Rectangle().fill(Theme.board.opacity(0.6)).frame(height: 1)
+            Rectangle().fill(Theme.line).frame(height: 1)
 
             transcript
         }
@@ -275,7 +275,7 @@ private struct LineRow: View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Button(action: onSeek) {
                 Text(segment.text)
-                    .font(.system(size: 20, design: .serif))
+                    .font(Theme.serif(20))
                     .foregroundStyle(textColor)
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.leading)
@@ -315,7 +315,7 @@ private struct LineRow: View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("Line", text: $draft, selection: $selection, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.system(size: 20, design: .serif))
+                .font(Theme.serif(20))
                 .foregroundStyle(Theme.ink)
                 .padding(8)
                 .background(Theme.card, in: .rect(cornerRadius: 6))
@@ -360,7 +360,7 @@ private struct ReadAlongDetails: View {
                 if let text = tape.tape.description ?? details?.summaryLong {
                     section("About") {
                         Text(text)
-                            .font(.system(size: 14, design: .serif))
+                            .font(Theme.serif(14))
                             .foregroundStyle(Theme.ink)
                             .lineSpacing(2)
                             .textSelection(.enabled)
@@ -655,7 +655,7 @@ private struct ChangeRow: View {
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.inkMuted)
             Text(sentence(changed))
-                .font(.system(size: 15, design: .serif))
+                .font(Theme.serif(15))
                 .foregroundStyle(Theme.ink)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)

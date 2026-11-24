@@ -464,7 +464,7 @@ private struct ReelRow: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(isSelected ? Theme.board.opacity(0.45) : Theme.card, in: .rect(cornerRadius: 7))
+        .background(isSelected ? Theme.railSelected : Theme.card, in: .rect(cornerRadius: 7))
         .contentShape(.rect)
         .onTapGesture { model.select(tape) }
         .contextMenu {

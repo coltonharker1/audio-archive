@@ -244,7 +244,7 @@ private struct LaneView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(
-                    isDropTarget ? Theme.accent : isLoaded ? Theme.accent.opacity(0.6) : Theme.board.opacity(0.6),
+                    isDropTarget ? Theme.accent : isLoaded ? Theme.accent.opacity(0.6) : Theme.line,
                     lineWidth: isDropTarget ? 2 : 1
                 )
         )

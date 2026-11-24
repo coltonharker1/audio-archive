@@ -75,7 +75,7 @@ private struct TapeResult: View {
                             .foregroundStyle(Theme.accent)
                             .frame(width: 80, alignment: .trailing)
                         Text(highlighted(moment.snippet))
-                            .font(.system(size: 15, design: .serif))
+                            .font(Theme.serif(15))
                             .foregroundStyle(Theme.ink)
                             .multilineTextAlignment(.leading)
                             .frame(maxWidth: .infinity, alignment: .leading)

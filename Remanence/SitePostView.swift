@@ -199,7 +199,7 @@ struct SitePostView: View {
                         systemImage: snapshot.published ? "eye" : "eye.slash"
                     )
                     .font(.callout)
-                    .foregroundStyle(snapshot.published ? Theme.good : Theme.inkMuted)
+                    .foregroundStyle(snapshot.published ? Theme.goodText : Theme.inkMuted)
                     .lineLimit(1)
                     Spacer(minLength: 8)
                     if push.hasKey {
@@ -220,7 +220,7 @@ struct SitePostView: View {
                 if changes.isEmpty {
                     Text("Matches the site.")
                         .font(.callout)
-                        .foregroundStyle(Theme.good)
+                        .foregroundStyle(Theme.goodText)
                 } else {
                     Text("To send: \(changes.summary.joined(separator: ", "))")
                         .font(.callout)
@@ -463,7 +463,7 @@ struct SitePostView: View {
             if let result = push.finished?.tapeID == tape.id ? push.finished?.result : nil {
                 Text("\(result.catalogNumber) is on the site")
                     .font(Theme.display(22))
-                    .foregroundStyle(Theme.good)
+                    .foregroundStyle(Theme.goodText)
             }
             if let failure = push.failure, push.pushingTapeID == nil {
                 Text(failure)
@@ -685,7 +685,7 @@ struct Thumbnail: View {
 
     var body: some View {
         ZStack {
-            Theme.board.opacity(0.3)
+            Theme.board
             if let image {
                 Image(nsImage: image)
                     .resizable()

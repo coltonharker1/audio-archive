@@ -40,7 +40,7 @@ struct RecordView: View {
                         if !record.isLarge && !record.isRecording {
                             RecordSetup()
                                 .frame(width: 250)
-                            Rectangle().fill(Theme.board.opacity(0.6)).frame(width: 1)
+                            Rectangle().fill(Theme.line).frame(width: 1)
                         }
                         RecordStage()
                     }
@@ -319,9 +319,9 @@ private struct RecordStage: View {
     }
 
     private var titleColor: Color {
-        if case .finished = record.stage { return Theme.good }
+        if case .finished = record.stage { return Theme.goodText }
         switch record.advice {
-        case .good: return Theme.good
+        case .good: return Theme.goodText
         case .clipping, .tooQuiet: return Theme.attention
         case .hot: return Theme.accent
         case .noSignal, .fine: return Theme.ink
@@ -497,7 +497,7 @@ struct VUMeter: View {
             context.draw(text, at: point(mark, radius: 180))
         }
         context.draw(
-            Text("VU").font(.system(size: 30 * scale, design: .serif)).foregroundStyle(ink),
+            Text("VU").font(Theme.serif(30 * scale)).foregroundStyle(ink),
             at: CGPoint(x: pivot.x, y: 160 * scale)
         )
 

@@ -117,7 +117,7 @@ struct CatalogView: View {
             .frame(width: 190, alignment: .leading)
             Text(status(of: tape))
                 .font(.system(size: 11))
-                .foregroundStyle(isPublished(tape) ? Theme.good : Theme.inkMuted)
+                .foregroundStyle(isPublished(tape) ? Theme.goodText : Theme.inkMuted)
                 .frame(width: 92, alignment: .trailing)
         }
         .padding(.vertical, 2)

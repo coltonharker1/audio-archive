@@ -153,16 +153,7 @@ private struct PlayheadClock: View {
 
 enum ReviewTime {
     /// `12:04.3`, with tenths for placing markers.
-    static func precise(_ seconds: Double) -> String {
-        // Rounded, so a marker nudged to 1234.0 can't read as 20:33.9 from float error.
-        let tenths = Int((max(0, seconds) * 10).rounded())
-        let minutes = tenths / 600
-        let remainder = (tenths % 600) / 10
-        let hours = minutes / 60
-        return hours > 0
-            ? String(format: "%d:%02d:%02d.%d", hours, minutes % 60, remainder, tenths % 10)
-            : String(format: "%d:%02d.%d", minutes, remainder, tenths % 10)
-    }
+    static func precise(_ seconds: Double) -> String { TimeText.precise(seconds) }
 }
 
 private enum WaveformColors {

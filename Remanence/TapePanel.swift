@@ -26,7 +26,7 @@ struct TapePanel: View {
             .padding(.vertical, 16)
             .background(Theme.card)
             .overlay(alignment: .top) {
-                Rectangle().fill(Theme.board).frame(height: 1)
+                Rectangle().fill(Theme.line).frame(height: 1)
             }
         }
     }
@@ -53,7 +53,7 @@ struct TapePanel: View {
             }
             if let description = tape.tape.description {
                 Text(description)
-                    .font(.system(size: 14, design: .serif))
+                    .font(Theme.serif(14))
                     .foregroundStyle(Theme.inkMuted)
                     .lineLimit(2)
                     .padding(.top, 2)
@@ -123,7 +123,7 @@ struct TapePanel: View {
                         .foregroundStyle(Theme.ink)
                         .padding(.horizontal, 8)
                         .frame(minHeight: 26)
-                        .background(isCurrent ? Theme.board.opacity(0.45) : .clear, in: .rect(cornerRadius: 5))
+                        .background(isCurrent ? Theme.railSelected : .clear, in: .rect(cornerRadius: 5))
                         .contentShape(.rect)
                     }
                     .buttonStyle(.plain)

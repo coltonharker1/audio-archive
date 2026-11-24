@@ -10,7 +10,7 @@ struct SetupView: View {
             VStack(alignment: .leading, spacing: 20) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Let’s get set up")
-                        .font(.system(size: 38, weight: .regular, design: .serif))
+                        .font(Theme.display(38))
                         .foregroundStyle(Theme.ink)
                     Text("Remanence needs a few tools to listen to your tapes.")
                         .foregroundStyle(Theme.inkMuted)
