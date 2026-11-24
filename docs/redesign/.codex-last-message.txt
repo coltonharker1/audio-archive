@@ -1,0 +1,5 @@
+Start with the [redesign proposal](/Users/colton/code/me/macos/audio-archive/docs/redesign/proposal.md) or open the [Shelf mockup](/Users/colton/code/me/macos/audio-archive/docs/redesign/01-shelf.html). The proposal links all seven self-contained screens.
+
+The central change is that Review and Edit share a tape workspace. Opening the selected track takes Side A at **0:42** directly to track 02 at **0:08**. The Catalog shows both affected box labels before a number swap, and Site Post makes the unpublished draft and public release separate decisions.
+
+All output is in `docs/redesign/`. I verified local links, offline assets, and script syntax. Headless Chrome exited before rendering, so the screenshots at 1440×900 remain unverified.
