@@ -37,7 +37,7 @@ struct SitePostView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                header
+                siteStatusLine
                 if let post, fields != nil {
                     if isOnSite { siteSection }
                     Group {
@@ -107,6 +107,14 @@ struct SitePostView: View {
                     savedText[track.id] = trackText[track.id]
                     savedNames[track.id] = trackNames[track.id]
                 }
+                // Renaming a side from the header can rename its opening track while
+                // this is showing. A name that isn't being edited here follows it.
+                for track in update.tracks {
+                    guard let before = post?.tracks.first(where: { $0.id == track.id }), before.name != track.name,
+                          trackNames[track.id] == savedNames[track.id] else { continue }
+                    trackNames[track.id] = track.name ?? ""
+                    savedNames[track.id] = trackNames[track.id]
+                }
                 for image in update.images where captions[image.id ?? 0] == nil {
                     captions[image.id ?? 0] = image.caption ?? ""
                     savedCaptions[image.id ?? 0] = captions[image.id ?? 0]
@@ -173,21 +181,10 @@ struct SitePostView: View {
 
     // MARK: Sections
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Button {
-                saveNow()
-                model.leavePost()
-            } label: {
-                Label("Shelf", systemImage: "chevron.left")
-            }
-            .buttonStyle(.borderless)
-            .tint(Theme.accent)
-
-            Text(isOnSite ? "ON THE SITE · \(tape.tape.catalogNumber ?? "")" : "SITE POST · NOT ON THE SITE YET")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(Theme.inkMuted)
-        }
+    private var siteStatusLine: some View {
+        Text(isOnSite ? "ON THE SITE · \(tape.tape.catalogNumber ?? "")" : "NOT ON THE SITE YET")
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(Theme.inkMuted)
     }
 
     @ViewBuilder private var siteSection: some View {

@@ -4,9 +4,6 @@ import SwiftUI
 /// The selected tape's details and playback, along the bottom of the shelf.
 struct TapePanel: View {
     @Environment(AppModel.self) private var model
-    @State private var deleting: SideAction?
-    @State private var renaming: SideAction?
-    @State private var newSideName = ""
 
     var body: some View {
         if let tape = model.selectedTape {
@@ -128,54 +125,11 @@ struct TapePanel: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityAddTraits(isCurrent ? .isSelected : [])
-                    .contextMenu {
-                        if tape.tape.pushedAt == nil {
-                            Button("Rename Side…") {
-                                newSideName = item.source.side ?? ""
-                                renaming = SideAction(tape: tape, item: item)
-                            }
-                            Button("Delete Side…", role: .destructive) {
-                                deleting = SideAction(tape: tape, item: item)
-                            }
-                        }
-                    }
                 }
             }
         }
         .frame(width: 280, height: 132)
-        .confirmationDialog(
-            deleting.map { "Delete \($0.item.name)?" } ?? "",
-            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
-            titleVisibility: .visible,
-            presenting: deleting
-        ) { action in
-            Button("Delete", role: .destructive) {
-                Task { await model.removeSide(action.item, of: action.tape) }
-            }
-        } message: { action in
-            Text("Its audio moves to the Trash, and its transcript and track markers are removed. The sides after it move up.")
-        }
-        .alert(
-            "Rename Side",
-            isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }),
-            presenting: renaming
-        ) { action in
-            TextField("Side", text: $newSideName)
-            Button("Rename") {
-                let name = newSideName
-                Task { await model.renameSide(action.item, to: name) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { action in
-            Text("A new name for \(action.item.name), like B.")
-        }
     }
-}
-
-/// A side waiting for a name or for confirmation.
-private struct SideAction {
-    let tape: ShelfTape
-    let item: ShelfTape.Item
 }
 
 /// Play, pause and scrub. Shared by the shelf panel and the read-along screen.

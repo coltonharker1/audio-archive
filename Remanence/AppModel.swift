@@ -13,6 +13,22 @@ enum SidebarItem: Hashable {
 
 enum Route: Equatable {
     case shelf, search, readAlong, review, record, post, edit, catalog, sitePosts, setup
+
+    /// The screens of one tape, in the order their tabs show.
+    static let tapeTabs: [Route] = [.review, .edit, .readAlong, .post]
+
+    /// What this screen's tab says, or nil when it isn't one of a tape's.
+    var tabTitle: String? {
+        switch self {
+        case .review: "Review"
+        case .edit: "Edit"
+        case .readAlong: "Read Along"
+        case .post: "Site Post"
+        case .shelf, .search, .record, .catalog, .sitePosts, .setup: nil
+        }
+    }
+
+    var isTapeTab: Bool { tabTitle != nil }
 }
 
 @MainActor
@@ -67,7 +83,8 @@ final class AppModel {
         didSet { if searchText != oldValue { runSearch() } }
     }
 
-    @ObservationIgnored private var routeBeforeReadAlong = Route.shelf
+    /// Where the tape on screen was opened from.
+    private(set) var tapeOrigin = TapeOrigin.shelf
     @ObservationIgnored private var routeBeforeSearch = Route.shelf
     @ObservationIgnored private(set) lazy var reviewModel = ReviewModel(app: self)
     @ObservationIgnored private(set) lazy var recordModel = RecordModel(app: self)
@@ -354,13 +371,8 @@ final class AppModel {
     // MARK: Pushing
 
     func openPost(_ tape: ShelfTape) {
-        routeBeforeReadAlong = route == .search ? .search : .shelf
         select(tape)
-        route = .post
-    }
-
-    func leavePost() {
-        leaveReadAlong()
+        show(tab: .post)
     }
 
     func leaveRecording() {
@@ -380,45 +392,65 @@ final class AppModel {
         return Pipeline(database: database, paths: paths).hasModel(name)
     }
 
-    // MARK: Read-along
-
-    var backLabel: String {
-        routeBeforeReadAlong == .search ? "Results" : "Shelf"
-    }
+    // MARK: A tape's screens
 
     func openReadAlong(_ tape: ShelfTape) {
-        routeBeforeReadAlong = route == .search ? .search : .shelf
         select(tape)
-        route = .readAlong
-    }
-
-    func leaveReadAlong() {
-        route = routeBeforeReadAlong == .search && !searchText.isEmpty ? .search : .shelf
+        show(tab: .readAlong)
     }
 
     func openReview(_ tape: ShelfTape) {
-        routeBeforeReadAlong = route == .search ? .search : .shelf
         select(tape)
-        route = .review
+        show(tab: .review)
     }
-
-    func leaveReview() {
-        leaveReadAlong()
-    }
-
-    // MARK: Edit mode
 
     func openEdit(_ tape: ShelfTape) {
-        routeBeforeReadAlong = route == .search ? .search : .shelf
         select(tape)
-        player.pause()
-        route = .edit
+        show(tab: .edit)
     }
 
-    func leaveEdit() {
-        editModel.leave()
-        leaveReadAlong()
+    /// Moves between the tabs of the tape on screen. Back still leads where it did.
+    func switchTab(_ tab: Route) {
+        guard route.isTapeTab, tab.isTapeTab, tab != route else { return }
+        show(tab: tab)
     }
+
+    private func show(tab: Route) {
+        noteOrigin()
+        // Edit plays through its own player.
+        if tab == .edit { player.pause() }
+        route = tab
+    }
+
+    /// Call before the route changes to one of a tape's screens.
+    private func noteOrigin() {
+        tapeOrigin = tapeOrigin.entering(
+            fromTapeScreen: route.isTapeTab,
+            fromSearch: route == .search,
+            collectionID: selectedCollectionID
+        )
+    }
+
+    /// Where Back goes from the tape on screen.
+    var backDestination: TapeOrigin {
+        tapeOrigin.back(searchText: searchText, collections: Set(collections.map(\.id)))
+    }
+
+    func goBack() {
+        if route == .edit { editModel.leave() }
+        switch backDestination {
+        case .results:
+            route = .search
+        case .collection(let id):
+            selectedCollectionID = id
+            route = .shelf
+        case .shelf:
+            selectedCollectionID = nil
+            route = .shelf
+        }
+    }
+
+    // MARK: Keys
 
     /// Keys for edit mode. Returns whether the key was used.
     func handleEditKey(code: UInt16, characters: String, shift: Bool) -> Bool {
@@ -539,14 +571,13 @@ final class AppModel {
     /// Opens a search result, playing from the moment if one was chosen.
     func openResult(_ result: SearchTapeResult, moment: SearchMoment?) {
         guard let tape = shelf.first(where: { $0.id == result.tapeID }) else { return }
-        routeBeforeReadAlong = .search
-
         let index = moment.flatMap { moment in
             tape.items.firstIndex { $0.source.id == moment.sourceID }
         } ?? 0
         let needsLoad = selectedTapeID != tape.id || selectedItemIndex != index
         selectedTapeID = tape.id
         selectedItemIndex = index
+        noteOrigin()
         route = .readAlong
 
         Task {
@@ -588,7 +619,7 @@ final class AppModel {
                 if let selectedTapeID, !tapes.contains(where: { $0.id == selectedTapeID }) {
                     self.selectedTapeID = nil
                     player.stop()
-                    if route == .readAlong || route == .review || route == .post || route == .edit { route = .shelf }
+                    if route.isTapeTab { route = .shelf }
                 }
             }
         } catch {
@@ -679,7 +710,12 @@ final class AppModel {
     }
 
     private func loadSelectedItem(thenPlay: Bool) async {
-        guard let item = selectedItem, let library else { return }
+        guard let item = selectedItem else { return }
+        await load(item, thenPlay: thenPlay)
+    }
+
+    private func load(_ item: ShelfTape.Item, thenPlay: Bool) async {
+        guard let library else { return }
         do {
             let url = try library.url(forLibraryPath: item.source.masterPath)
             let loaded = await player.load(url, duration: item.source.duration)
@@ -722,12 +758,19 @@ final class AppModel {
             selectedItemIndex = 0
         }
         let sourceID = item.id
+        var removed = false
         do {
             try await Task.detached {
                 try await library.removeSide(sourceID: sourceID)
             }.value
+            removed = true
         } catch {
             message = "\(item.name) couldn’t be deleted. \(error.localizedDescription)"
+        }
+        // The tape's screens stay open, so the first recording left is made ready to
+        // play. It's picked from `tape`, since the shelf may not have caught up.
+        if selectedTapeID == tape.id, let first = tape.items.first(where: { !removed || $0.id != sourceID }) {
+            await load(first, thenPlay: false)
         }
     }
 

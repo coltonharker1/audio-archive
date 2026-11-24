@@ -45,24 +45,12 @@ struct LibraryView: View {
                     ImportBanner()
                 }
                 switch model.route {
-                case .readAlong:
+                case .review, .edit, .readAlong, .post:
                     if let tape = model.selectedTape {
-                        ReadAlongView(tape: tape)
+                        TapeWorkspaceView(tape: tape)
                     }
                 case .record:
                     RecordView()
-                case .post:
-                    if let tape = model.selectedTape {
-                        SitePostView(tape: tape)
-                    }
-                case .review:
-                    if let tape = model.selectedTape {
-                        ReviewView(tape: tape)
-                    }
-                case .edit:
-                    if let tape = model.selectedTape {
-                        EditView(tape: tape)
-                    }
                 case .search:
                     SearchResultsView()
                 case .catalog:
@@ -118,21 +106,19 @@ private struct Breadcrumb: View {
         case .setup: ["Setup"]
         // Leaving the recorder goes back to the collection it was opened from.
         case .record: [model.selectedCollection?.collection.name ?? "Shelf", "Recording"]
-        case .review: tapeCrumbs("Review")
-        case .edit: tapeCrumbs("Edit")
-        case .readAlong: tapeCrumbs("Read Along")
-        case .post: tapeCrumbs("Site Post")
+        case .review, .edit, .readAlong, .post: tapeCrumbs
         }
     }
 
     /// The first crumb is where Back goes from a tape's screen.
-    private func tapeCrumbs(_ screen: String) -> [String] {
-        var origin = model.backLabel
-        if origin != "Results", let collection = model.selectedCollection {
-            origin = collection.collection.name
+    private var tapeCrumbs: [String] {
+        let origin = switch model.backDestination {
+        case .results: "Results"
+        case .collection(let id): model.collections.first { $0.id == id }?.collection.name ?? "Shelf"
+        case .shelf: "Shelf"
         }
         let tape = model.selectedTape.map { $0.tape.catalogNumber ?? $0.tape.title }
-        return [origin, tape, screen].compactMap(\.self)
+        return [origin, tape, model.route.tabTitle].compactMap(\.self)
     }
 
     /// Long names are cut here, since a toolbar item takes whatever width it asks for.
@@ -150,11 +136,19 @@ private struct Breadcrumb: View {
                         .foregroundStyle(Theme.crumbSeparator)
                         .accessibilityHidden(true)
                 }
-                Text(shortened(crumb))
+                let text = Text(shortened(crumb))
                     .fontWeight(isHere ? .semibold : .regular)
                     .foregroundStyle(isHere ? Theme.ink : Theme.muted)
-                    .help(crumb)
-                    .accessibilityLabel(crumb)
+                if index == 0 && model.route.isTapeTab {
+                    Button { model.goBack() } label: { text.contentShape(.rect) }
+                        .buttonStyle(.plain)
+                        .help("Back to \(crumb)")
+                        .accessibilityLabel("Back to \(crumb)")
+                } else {
+                    text
+                        .help(crumb)
+                        .accessibilityLabel(crumb)
+                }
             }
         }
         .font(.system(size: 13))

@@ -20,9 +20,11 @@ struct ReadAlongView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-                .padding(.horizontal, 32)
-                .padding(.top, 8)
+            if tape.tape.pushedAt == nil {
+                approval
+                    .padding(.horizontal, 32)
+                    .padding(.top, 12)
+            }
 
             TransportBar()
                 .padding(.horizontal, 32)
@@ -77,59 +79,15 @@ struct ReadAlongView: View {
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Button {
-                    model.leaveReadAlong()
-                } label: {
-                    Label(model.backLabel, systemImage: "chevron.left")
-                }
-                .buttonStyle(.borderless)
-                .tint(Theme.accent)
-
-                Spacer()
-
-                Button("Review", systemImage: "waveform") { model.openReview(tape) }
-                Button("Edit", systemImage: "slider.horizontal.3") { model.openEdit(tape) }
-                Button("Site Post", systemImage: "doc.richtext") { model.openPost(tape) }
-
-                if tape.tape.pushedAt == nil {
-                    let approved = tape.tape.approvedAt != nil
-                    Button(approved ? "Approved" : "Looks Good", systemImage: approved ? "checkmark" : "hand.thumbsup") {
-                        Task { await model.setApproved(tape, !approved) }
-                    }
-
-                }
+    private var approval: some View {
+        let approved = tape.tape.approvedAt != nil
+        return HStack {
+            Spacer(minLength: 0)
+            Button(approved ? "Approved" : "Looks Good", systemImage: approved ? "checkmark" : "hand.thumbsup") {
+                Task { await model.setApproved(tape, !approved) }
             }
-
-            Text(meta)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(Theme.inkMuted)
-            Text(tape.tape.title)
-                .font(Theme.display(26))
-                .foregroundStyle(Theme.ink)
-                .lineLimit(3)
-                .textSelection(.enabled)
-
-            if tape.items.count > 1 {
-                Picker("Track", selection: Binding(
-                    get: { model.selectedItemIndex },
-                    set: { model.choose(itemAt: $0) }
-                )) {
-                    ForEach(Array(tape.items.enumerated()), id: \.element.id) { index, item in
-                        Text(item.name).tag(index)
-                    }
-                }
-                .frame(maxWidth: 320)
-            }
+            .fixedSize()
         }
-    }
-
-    private var meta: String {
-        var parts = [tape.tape.catalogNumber, tape.tape.medium?.uppercased()].compactMap(\.self)
-        if let era = tape.tape.era { parts.append(era.uppercased()) }
-        return parts.joined(separator: " · ")
     }
 
     @ViewBuilder private var transcript: some View {

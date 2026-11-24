@@ -6,18 +6,11 @@ struct ReviewView: View {
     @Environment(AppModel.self) private var model
     @State private var showsTracks = true
 
-    let tape: ShelfTape
-
     private var review: ReviewModel { model.reviewModel }
     private var sourceID: Int64? { model.selectedItem?.source.id }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-                .padding(.horizontal, 28)
-                .padding(.top, 8)
-                .padding(.bottom, 12)
-
             if review.review != nil, let waveform = review.waveform {
                 VStack(alignment: .leading, spacing: 10) {
                     OverviewStrip(waveform: waveform)
@@ -29,6 +22,7 @@ struct ReviewView: View {
                     KeyHints()
                 }
                 .padding(.horizontal, 28)
+                .padding(.top, 12)
                 .padding(.bottom, 16)
             } else {
                 preparing
@@ -50,36 +44,6 @@ struct ReviewView: View {
                     Label("Tracks", systemImage: "sidebar.trailing")
                 }
                 .help(showsTracks ? "Hide tracks" : "Show tracks")
-            }
-        }
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Button {
-                model.leaveReview()
-            } label: {
-                Label(model.backLabel, systemImage: "chevron.left")
-            }
-            .buttonStyle(.borderless)
-            .tint(Theme.accent)
-
-            Text(tape.tape.title)
-                .font(Theme.display(22))
-                .foregroundStyle(Theme.ink)
-                .lineLimit(1)
-                .help(tape.tape.title)
-
-            if tape.items.count > 1 {
-                Picker("Recording", selection: Binding(
-                    get: { model.selectedItemIndex },
-                    set: { model.choose(itemAt: $0) }
-                )) {
-                    ForEach(Array(tape.items.enumerated()), id: \.element.id) { index, item in
-                        Text(item.name).tag(index)
-                    }
-                }
-                .frame(maxWidth: 320)
             }
         }
     }
@@ -603,6 +567,8 @@ private struct TrackRow: View {
         .onChange(of: isFocused) { _, focused in
             if !focused { save() }
         }
+        // Choosing another tab can take the field away before it loses focus.
+        .onDisappear(perform: save)
     }
 
     private var isCurrent: Bool {

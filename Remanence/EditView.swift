@@ -14,8 +14,7 @@ struct EditView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
                 .padding(.horizontal, 28)
-                .padding(.top, 8)
-                .padding(.bottom, 10)
+                .padding(.vertical, 10)
 
             if edit.lanes.isEmpty {
                 VStack(spacing: 10) {
@@ -89,28 +88,13 @@ struct EditView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Button {
-                model.leaveEdit()
-            } label: {
-                Label(model.backLabel, systemImage: "chevron.left")
-            }
-            .buttonStyle(.borderless)
-            .tint(Theme.accent)
-
-            Text(tape.tape.title)
-                .font(Theme.display(22))
-                .foregroundStyle(Theme.ink)
-                .lineLimit(1)
-                .help(tape.tape.title)
-
-            Text(edit.isOnSite
-                 ? "This tape is on the site. Its audio there can’t be replaced yet, so these settings are locked."
-                 : "Level, speed and direction are heard here and applied when you push. Your masters never change.")
-                .font(.system(size: 12))
-                .foregroundStyle(edit.isOnSite ? Theme.attention : Theme.inkMuted)
-                .lineLimit(2)
-        }
+        Text(edit.isOnSite
+             ? "This tape is on the site. Its audio there can’t be replaced yet, so these settings are locked."
+             : "Level, speed and direction are heard here and applied when you push. Your masters never change.")
+            .font(.system(size: 12))
+            .foregroundStyle(edit.isOnSite ? Theme.attention : Theme.inkMuted)
+            .lineLimit(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -257,16 +241,21 @@ private struct LaneView: View {
             if !isNaming { name = updated ?? "" }
         }
         .onChange(of: isNaming) { _, naming in
-            if !naming, isEditingName {
-                isEditingName = false
-                edit.rename(lane, to: name)
-            }
+            if !naming { finishNaming() }
         }
+        // Choosing another tab can take the field away before it loses focus.
+        .onDisappear(perform: finishNaming)
         .confirmationDialog("Join \(lane.label) onto the track before it?", isPresented: $confirmsJoin) {
             Button("Join Tracks", role: .destructive) { edit.joinWithPrevious(lane) }
         } message: {
             Text("\(lane.label)’s name, description and settings are removed. It takes on the settings of the track before it.")
         }
+    }
+
+    private func finishNaming() {
+        guard isEditingName else { return }
+        isEditingName = false
+        edit.rename(lane, to: name)
     }
 
     private var titleRow: some View {
