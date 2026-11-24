@@ -404,6 +404,55 @@ import Testing
         #expect(shelf[0].items.map(\.name) == ["Side A", "Side B"])
     }
 
+    /// Side B was spoiled and recorded again as C, then B was deleted and C renamed.
+    /// The next side is C again, in a file of its own.
+    @Test func aSideAfterARenameNeverReusesAFile() async throws {
+        let a = try await library.beginCapture(machine: nil, title: "T", speed: nil)
+        try writeAudio(to: a.url)
+        try await library.finishCapture(sourceID: a.sourceID)
+        let b = try await library.beginNextSide(tapeID: a.tapeID)
+        try writeAudio(to: b.url, seconds: 2)
+        try await library.finishCapture(sourceID: b.sourceID)
+        let c = try await library.beginNextSide(tapeID: a.tapeID)
+        try writeAudio(to: c.url, seconds: 3)
+        try await library.finishCapture(sourceID: c.sourceID)
+
+        try await library.removeSide(sourceID: b.sourceID) { try FileManager.default.removeItem(at: $0) }
+        try await library.renameSide(sourceID: c.sourceID, to: "B")
+        #expect(try await library.nextSide(tapeID: a.tapeID) == "C")
+
+        let next = try await library.beginNextSide(tapeID: a.tapeID)
+        #expect(next.side == "C")
+        #expect(next.url.lastPathComponent == "side-c-2.caf")
+        #expect(FileManager.default.fileExists(atPath: c.url.path), "the renamed side's master is untouched")
+        try writeAudio(to: next.url)
+        try await library.finishCapture(sourceID: next.sourceID)
+
+        let shelf = try await database.writer.read { db in try Library.fetchShelf(db) }
+        #expect(shelf[0].items.map(\.name) == ["Side A", "Side B", "Side C"])
+        #expect(shelf[0].items.map(\.source.position) == [0, 1, 2])
+    }
+
+    /// Re-recording the only side so far: it's removed, then recorded again as A.
+    @Test func theOnlySideCanBeRecordedAgain() async throws {
+        let first = try await library.beginCapture(machine: nil, title: "T", speed: nil)
+        try writeAudio(to: first.url)
+        try await library.finishCapture(sourceID: first.sourceID)
+
+        await #expect(throws: SideError.lastSide) {
+            try await library.removeSide(sourceID: first.sourceID)
+        }
+        try await library.removeSide(sourceID: first.sourceID, allowingLast: true) { try FileManager.default.removeItem(at: $0) }
+        let again = try await library.beginNextSide(tapeID: first.tapeID)
+        try writeAudio(to: again.url)
+        try await library.finishCapture(sourceID: again.sourceID)
+
+        #expect(again.side == "A")
+        let shelf = try await database.writer.read { db in try Library.fetchShelf(db) }
+        #expect(shelf.count == 1)
+        #expect(shelf[0].items.map(\.name) == ["Side A"])
+    }
+
     /// The crash test: the app dies mid-recording, and on the next launch the audio
     /// so far is on the shelf and queued for processing.
     @Test func anInterruptedRecordingIsRecoveredAtLaunch() async throws {

@@ -5,7 +5,7 @@ Written 2026-11-02. Mockups: https://claude.ai/artifact/Vec7wX1cEPYiuFKDuKfzE9
 
 ## Current status
 
-**Last updated 2026-11-03.** Branch `native-app`, not pushed. See
+**Last updated 2026-11-24.** Branches `native-app` and `main`, pushed. See
 [CLAUDE.md](../CLAUDE.md) for commands and rules.
 
 | Phase | State |
@@ -18,6 +18,33 @@ Written 2026-11-02. Mockups: https://claude.ai/artifact/Vec7wX1cEPYiuFKDuKfzE9
 | **5. Recording** | **Committed and tested live on the MacBook mic. Needs the Scarlett to finish.** |
 | 6. Push to the site | **Live on 2026-11-17.** Push, update and refresh all tested against the real site. Untried by hand. |
 | 7. Retire the old code | Done (2026-11-19) |
+| 8. Edit mode | Level, speed, reverse, zoom, append, reorder, trims and tape-style scrubbing. Committed 2026-11-24. |
+| 9. Collections | **App and site live 2026-11-24.** Pushing a collection is untried on the real site. |
+| 10. Catalog numbers | **Live 2026-11-24.** RA numbers given at recording; the Catalog renumbers. |
+
+### Since 2026-11-23
+
+- **Sides:** Delete Side and Rename Side on the tape panel; Re-record the side just
+  recorded. A master file name is never reused.
+- **Edit mode:** zoom into a track to split precisely; drag a track onto another to
+  append it (pushed as one joined file, sample for sample); drag between tracks or
+  Move Up/Down to reorder (`track.sort_index`); double-click names to rename.
+- **Trims:** per track, by dragging handles at each edge of a waveform
+  (`track.cut_start` / `cut_end`, master seconds in recording order). Review's I and O
+  trim a whole side and are labelled so.
+- **Scrubbing:** dragging a waveform or a trim handle plays the audio like a reel
+  rocked by hand (`TapeScrubVoice`), in Edit and Review.
+- **Collections:** reels from one box, with a write-up, photos and their own order.
+  Sidebar section, collection screen, picker when recording, and the reel's where and
+  when found fall back to the collection's. Pushed whole through
+  `/api/sync/collection`; a published collection's address is fixed. The site has
+  `/collections/[slug]`, the index by collection, and Previous/Next on reel pages.
+  Design notes and Codex's mockups are in `docs/collections/`.
+- **Catalog numbers:** a tape gets the lowest free RA number when recording starts or
+  when it's dropped in, shown on the recording screen; the push asks the site for it.
+  The Catalog sheet renumbers by dragging or typing, through `/api/sync/renumber`;
+  published posts redirect from old numbers.
+- **Ideas for later** are in [ideas.md](ideas.md).
 
 ### Next steps
 
@@ -48,12 +75,15 @@ migration and backfill were already applied to the production database (16 files
 `sync_files`). A new `SYNC_API_KEY` is on Vercel (production only) and in the Keychain
 for the app. Checked against the live site: refreshing RA-001 (its 5 tracks matched by
 hash, and its 10 photos downloaded), pushing a test tape (RA-009, unpublished) and
-updating its description. **RA-009 is a test post for the user to delete in the admin.**
-That delete now keeps any file another post still uses.
+updating its description. RA-009 was later deleted (2026-11-23).
 
-**RA-008 isn't in the local backup.** It's an unpublished draft, "Accordion Class 1 —
-Practice Selections" (33 minutes), made by the old sync on 2026-04-15. Its two WAV files
-are only in R2. Download them before anything else happens to that post.
+**RA-008 and RA-009 were deleted from the site on 2026-11-23**, through the new
+`/api/sync/delete`, so the next pushes take those numbers again. RA-008 was an
+unpublished draft, "Accordion Class 1 — Practice Selections" (33 minutes), made by the
+old sync on 2026-04-15. Both its WAVs were saved first, verified against storage's size
+and MD5 ETag, to `~/Music/remanence-ra-008-originals/` (read-only, with SHA256SUMS):
+the 44.1 kHz 24-bit original and the 16 kHz streaming copy. The original is still in R2.
+They aren't in the library yet.
 
 Previews share the production database and R2 bucket, so test there with care.
 
@@ -308,6 +338,69 @@ your confirmation at the time.
 Ported, and now only in git history since Phase 7: the prep filter chain (`internal/audio/prep.go`), summary prompts
 (`internal/summarize/prompts.go`), the recording types (`types.go`) and summary
 normalization.
+
+## Edit mode
+
+**Built 2026-11-23** (from the design below):
+- `TrackAdjustments` (gain dB, speed, reversed), stored on `track` (migration v8),
+  rounded so the same settings always make the same files.
+- `TrackPlayer`: an output-only `AVAudioEngine` with player node → varispeed → EQ
+  global gain. It reads the master a second at a time and reverses each chunk for
+  backwards play. Positions are always master time.
+- `EditView`/`EditModel` (route `.edit`, "Edit" button on the tape panel and the
+  read-along screen): one lane per track, grouped by side. Each lane has a name, play
+  button, waveform drawn at its level (reversed when reversed, red where it would
+  clip), a level slider with **Fit** (measures the true peak and sets it to −1 dBFS),
+  speed −/+1% with ½×, 1× and 2× presets, and Reverse. A lane's menu has Split at
+  Playhead (snapped to quiet, Option for exact; the new track copies the settings) and
+  Join with Previous. Keys: Space, ←/→ ±5 s (Shift ±30 s), M to split.
+- Push applies settings to **both** FLAC and MP3 (user's choice). Reversed tracks are
+  first written backwards to a temporary CAF in Swift, because `areverse` holds the
+  whole track in memory. Level is `volume=`, speed is `asetrate`+`aresample` back to
+  the master's rate. FLAC stays 24-bit. Cached file names include the settings.
+- Tapes already on the site refuse adjustments (`AdjustmentError.alreadyOnSite`).
+
+Not done yet: proposed (unconfirmed) splits, hum-based speed suggestion, evening out
+levels. Other screens (read-along, review) still play the master unadjusted, and
+transcripts of reversed tracks were made from the backwards audio.
+
+### Original design (2026-11-19)
+
+The user's idea, from calibrating on a TEAC reel-to-reel through the Scarlett 2i2: once a
+session is recorded, an edit mode lists **each track as its own waveform lane**, with
+actions on each one. It replaces the review screen and builds on it.
+
+- **Lanes.** Each track has its name, length, play button, waveform and adjustments.
+  Selecting one opens a zoomed detail view for moving its edges, trimming and adding
+  split points.
+- **Proposed splits.** Markers dropped while recording, and points added afterward,
+  start as proposals: dashed, and snapped to the nearest real quiet gap. Confirming one
+  makes the new track its own lane. Markers already have an `origin` column for this.
+- **Adjustments per track,** never applied to the master: level (gain), **speed**, and
+  later "even out levels" (gentle upward compression). Speed works like real tape, with
+  pitch and tempo together (`AVAudioUnitVarispeed` in the app, resampling in `ffmpeg`),
+  with presets for ½× and 2× plus fine steps of about 1%.
+- **Live preview.** In-app playback applies each track's settings, and the waveform
+  redraws to match.
+- **At push,** the published copies are cut with the adjustments.
+
+Why: on found tapes, tracks on one tape were often recorded at different speeds or
+levels. Speed changes only between tracks, not within one, and the differences are
+obvious to the ear.
+
+Open questions:
+- Whether the FLAC download gets the adjustments or stays an exact copy of the master.
+  Leaning toward adjusting both, so the download matches what's heard.
+- Tracks already on the site: changing their audio means replacing files there, which
+  the app can't do yet.
+- Transcripts stay tied to master time. A track whose speed changes a lot could be
+  re-transcribed.
+
+Build order: (1) analyze the calibration tape, tuning level advice and end detection
+(the detector gave one false alarm midway through side A, and caught the real end),
+and measure the tracks' speed and level differences. (2) Lanes, proposed and confirmed
+splits, and the detail view. (3) Level and speed with live preview, applied at push.
+(4) Speed suggested from mains hum (60 Hz), and evening out levels.
 
 ## Later
 

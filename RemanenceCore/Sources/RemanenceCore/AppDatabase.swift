@@ -212,6 +212,79 @@ public struct AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v8-track-adjustments") { db in
+            // How each track should sound, applied to published copies, never the master.
+            try db.alter(table: "track") { t in
+                t.add(column: "gain_db", .double).notNull().defaults(to: 0)
+                t.add(column: "speed", .double).notNull().defaults(to: 1)
+                t.add(column: "reversed", .boolean).notNull().defaults(to: false)
+            }
+        }
+
+        migrator.registerMigration("v9-appended-tracks") { db in
+            // A track can carry on into another, like a song split by a side flip. The
+            // one appended remembers the track it follows. Removing that track lets it
+            // stand on its own again.
+            try db.alter(table: "track") { t in
+                t.add(column: "appended_to_track_id", .integer).references("track", onDelete: .setNull)
+            }
+        }
+
+        migrator.registerMigration("v10-track-order") { db in
+            // Where a track plays on the site, once it's been moved. Unmoved tapes keep
+            // the order of their recordings.
+            try db.alter(table: "track") { t in
+                t.add(column: "sort_index", .double)
+            }
+        }
+        migrator.registerMigration("v11-track-cuts") { db in
+            // Seconds of master left out at a track's start and end, so a track can lose
+            // dead air or a click without moving its markers. The master stays whole.
+            try db.alter(table: "track") { t in
+                t.add(column: "cut_start", .double).notNull().defaults(to: 0)
+                t.add(column: "cut_end", .double).notNull().defaults(to: 0)
+            }
+        }
+        migrator.registerMigration("v12-collections") { db in
+            // Reels that came from the same box. A tape is in at most one, at a place
+            // its owner chooses, and takes where and when it was found from it unless
+            // it has its own.
+            try db.create(table: "collection") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("uuid", .text).notNull().unique()
+                t.column("name", .text).notNull()
+                t.column("slug", .text).notNull().unique()
+                t.column("description", .text)
+                t.column("where_found", .text)
+                t.column("date_found", .text)
+                t.column("created_at", .datetime).notNull()
+            }
+            try db.create(table: "collection_image") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("collection_id", .integer).notNull().indexed().references("collection", onDelete: .cascade)
+                t.column("position", .integer).notNull()
+                t.column("path", .text).notNull()
+                t.column("sha256", .text).notNull()
+                t.column("filename", .text).notNull()
+                t.column("caption", .text)
+                t.uniqueKey(["collection_id", "sha256"])
+            }
+            try db.alter(table: "tape") { t in
+                t.add(column: "collection_id", .integer).indexed().references("collection", onDelete: .setNull)
+                t.add(column: "collection_position", .double)
+            }
+        }
+        migrator.registerMigration("v13-collection-sync") { db in
+            // What the site has for a collection: its clock, whether it's published,
+            // what was last sent, and which reels the site didn't have yet.
+            try db.alter(table: "collection") { t in
+                t.add(column: "site_updated_at", .text)
+                t.add(column: "site_published", .boolean).notNull().defaults(to: false)
+                t.add(column: "site_sent", .jsonText)
+                t.add(column: "site_missing_reels", .jsonText)
+            }
+        }
+
         return migrator
     }
 }

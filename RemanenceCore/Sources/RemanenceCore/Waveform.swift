@@ -177,7 +177,9 @@ public struct Waveform: Equatable, Sendable {
     /// Levels from 0 to 1 for drawing a stretch of the tape in a given number of
     /// columns, scaled against this tape's noise floor so hiss sits near zero and
     /// gaps are easy to see.
-    public func levels(from start: Double, to end: Double, columns: Int, style: Style = .peak) -> [Float] {
+    ///
+    /// `gainDB` draws it as it will sound with a level change, against the same floor.
+    public func levels(from start: Double, to end: Double, columns: Int, style: Style = .peak, gainDB: Double = 0) -> [Float] {
         guard columns > 0, end > start, !peaks.isEmpty else { return [] }
         let binsPerColumn = (end - start) * Double(Self.binsPerSecond) / Double(columns)
         let floor = Float(quietLevel)
@@ -200,8 +202,21 @@ public struct Waveform: Equatable, Sendable {
                 for index in bins { total += Int(rms[index]) }
                 value = Float(total) / Float(bins.count)
             }
-            return max(0.02, min(1, (value - floor) / range))
+            let adjusted = min(255, value + Float(gainDB) * Self.stepsPerDecibel)
+            return max(0.02, min(1, (adjusted - floor) / range))
         }
+    }
+
+    /// Levels are stored from -70 dB at 0 to full scale at 255.
+    private static let stepsPerDecibel: Float = 255 / 70
+
+    /// The loudest moment in a stretch, in decibels below full scale. It's measured on
+    /// the waveform's reduced copy of the audio, so the real peak can be a little higher.
+    public func loudestPeak(from start: Double, to end: Double) -> Double? {
+        let first = max(0, Int(start * Double(Self.binsPerSecond)))
+        let last = min(peaks.count, Int(end * Double(Self.binsPerSecond)))
+        guard last > first, let loudest = peaks[first..<last].max() else { return nil }
+        return Double(Float(loudest) / Self.stepsPerDecibel) - 70
     }
 
     /// The closest quiet moment to a time, for placing a marker between sounds.

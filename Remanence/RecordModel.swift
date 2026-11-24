@@ -28,6 +28,12 @@ final class RecordModel {
     private(set) var permissionDenied = false
     private(set) var recordingTapeID: Int64?
     private(set) var currentSide = "A"
+    /// The tape's RA number: the one it will get, before Record, and the one it has after.
+    private(set) var catalogNumber: String?
+    /// What the next side will be called, from the tape's sides as they are now.
+    private(set) var nextSide = "B"
+    /// The side just recorded, which can be recorded again.
+    private(set) var lastRecordedSourceID: Int64?
     private(set) var isLarge = false
     private(set) var isListening = false
     private(set) var audioStalled = false
@@ -37,6 +43,11 @@ final class RecordModel {
     var selectedMachineID: Int64?
     var selectedSpeed: String?
     var tapeName = ""
+    /// The collection the tape goes in, `newCollection` for one made from
+    /// `newCollectionName`, or nil. It stays chosen for the next tape from the same box.
+    var collectionChoice: Int64?
+    var newCollectionName = ""
+    static let newCollection: Int64 = -1
     var knobNote = ""
     var selectedDeviceUID: String?
     var channelMode = ChannelMode.first
@@ -85,6 +96,16 @@ final class RecordModel {
         stage = .setup
         startListening()
         startMonitor()
+        await refreshCatalogNumber()
+        // The site may have numbers this library doesn't, so check, then look again.
+        await app.pushModel.refreshSiteNumbers()
+        await refreshCatalogNumber()
+    }
+
+    /// Works out the number the next tape will get. A tape being recorded keeps its own.
+    func refreshCatalogNumber() async {
+        guard recordingTapeID == nil, let library = app.library else { return }
+        catalogNumber = try? await library.nextCatalogNumber(excluding: app.siteNumbers)
     }
 
     /// Stops the meter when leaving the screen. Refuses while recording, so a stray
@@ -101,6 +122,7 @@ final class RecordModel {
         stage = .setup
         target = nil
         recordingTapeID = nil
+        lastRecordedSourceID = nil
         checkResult = nil
         saveMachineSettings()
     }
@@ -257,8 +279,14 @@ final class RecordModel {
                 target = try await library.beginCapture(
                     machine: selectedMachine,
                     title: tapeName,
-                    speed: selectedSpeed
+                    speed: selectedSpeed,
+                    collectionID: await chosenCollection(library),
+                    excludingNumbers: app.siteNumbers
                 )
+                let tapeID = target.tapeID
+                catalogNumber = try? await library.database.writer.read { db in
+                    try String.fetchOne(db, sql: "SELECT catalog_number FROM tape WHERE id = ?", arguments: [tapeID])
+                }
             }
             await app.suspendPipelineForRecording()
             try capture.startRecording(to: target.url)
@@ -302,6 +330,10 @@ final class RecordModel {
             } catch {
                 app.message = "The recording is safe, but it couldn’t be finished yet. It’ll be recovered next time Remanence opens. \(error.localizedDescription)"
             }
+            // An empty recording is cleared away, so there's nothing to record again.
+            let kept = try? await library.database.writer.read { db in try Source.fetchOne(db, key: target.sourceID) }
+            lastRecordedSourceID = kept == nil ? nil : target.sourceID
+            nextSide = (try? await library.nextSide(tapeID: target.tapeID)) ?? nextSide
         }
         target = nil
         await app.resumePipeline()
@@ -335,11 +367,49 @@ final class RecordModel {
         await startRecording()
     }
 
+    /// Records the side just finished again from the start. The take being replaced
+    /// goes to the Trash first, so it can still be got back from Finder.
+    func reRecordLastSide() async {
+        guard stage == .finished, isListening, let sourceID = lastRecordedSourceID, let library = app.library else { return }
+        // Processing starts as soon as a side finishes. Pausing puts it back in the
+        // queue, so nothing is working on the take while it's removed.
+        await app.suspendPipelineForRecording()
+        do {
+            try await Task.detached {
+                try await library.removeSide(sourceID: sourceID, allowingLast: true)
+            }.value
+        } catch {
+            await app.resumePipeline()
+            app.message = "Side \(currentSide) couldn’t be moved to the Trash, so it’s still here. \(error.localizedDescription)"
+            return
+        }
+        lastRecordedSourceID = nil
+        await startRecording()
+    }
+
     func reviewRecording() {
         guard let tapeID = recordingTapeID,
               let tape = app.shelf.first(where: { $0.id == tapeID }) else { return }
         close()
         app.openReview(tape)
+    }
+
+    /// The collection to record into, making it first if it's new. A collection that
+    /// can't be made never stops the recording; it's just recorded outside one.
+    private func chosenCollection(_ library: Library) async -> Int64? {
+        guard let choice = collectionChoice else { return nil }
+        guard choice == Self.newCollection else { return choice }
+        let name = newCollectionName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        do {
+            let id = try await Task.detached { try await library.createCollection(name: name) }.value
+            collectionChoice = id
+            newCollectionName = ""
+            return id
+        } catch {
+            app.message = "The collection couldn’t be made, so this tape isn’t in one. \(error.localizedDescription)"
+            return nil
+        }
     }
 
     /// Starts over with a new tape after finishing one.
@@ -348,7 +418,11 @@ final class RecordModel {
         target = nil
         tapeName = ""
         currentSide = "A"
+        nextSide = "B"
+        lastRecordedSourceID = nil
         stage = .setup
+        catalogNumber = nil
+        Task { await refreshCatalogNumber() }
     }
 
     // MARK: Watching the signal

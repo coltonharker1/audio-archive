@@ -25,6 +25,7 @@ struct SitePostView: View {
     @State private var isDropTargeted = false
 
     @State private var confirmingRefresh = false
+    @State private var confirmingDelete = false
 
     private var push: PushModel { model.pushModel }
     private var isOnSite: Bool { tape.tape.pushedAt != nil }
@@ -64,6 +65,11 @@ struct SitePostView: View {
             Button("Refresh from Site", role: .destructive) { push.refresh(tape) }
         } message: {
             Text("Changes here that haven’t been sent to the site will be lost.")
+        }
+        .confirmationDialog("Delete \(tape.tape.catalogNumber ?? "this post") from the site?", isPresented: $confirmingDelete) {
+            Button("Delete from Site", role: .destructive) { push.deleteFromSite(tape) }
+        } message: {
+            Text("The post is removed from the site for everyone. This tape, its masters and everything written here stay in your library, and it can be pushed again later as a new post with a new catalog number.")
         }
     }
 
@@ -187,9 +193,23 @@ struct SitePostView: View {
     @ViewBuilder private var siteSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let snapshot = post.flatMap({ SiteSnapshot.decode($0.tape.siteSnapshot) }) {
-                Text(snapshot.published ? "Published on the site." : "On the site, not published yet.")
+                HStack(spacing: 10) {
+                    Label(
+                        snapshot.published ? "Published. Visitors can see it." : "Not published. Only you can see it.",
+                        systemImage: snapshot.published ? "eye" : "eye.slash"
+                    )
                     .font(.callout)
-                    .foregroundStyle(Theme.inkMuted)
+                    .foregroundStyle(snapshot.published ? Theme.good : Theme.inkMuted)
+                    .lineLimit(1)
+                    Spacer(minLength: 8)
+                    if push.hasKey {
+                        Button(snapshot.published ? "Unpublish" : "Publish") {
+                            push.setPublished(tape, !snapshot.published)
+                        }
+                        .disabled(needsRefresh || push.isPushing)
+                        .fixedSize()
+                    }
+                }
             }
             if needsRefresh {
                 Text("Refresh from the site to load what it has now, including anything changed in its admin. Then edit here and send the changes with Update on Site.")
@@ -256,6 +276,11 @@ struct SitePostView: View {
                         }
                         .disabled(push.isPushing)
                         .fixedSize()
+                        Spacer(minLength: 8)
+                        Button("Delete from Site…", systemImage: "trash") { confirmingDelete = true }
+                            .disabled(push.isPushing || needsRefresh)
+                            .fixedSize()
+                            .help(needsRefresh ? "Refresh from the site first" : "Remove this post from the site")
                     }
                 }
             }
@@ -301,13 +326,18 @@ struct SitePostView: View {
             }
             HStack(alignment: .top, spacing: 14) {
                 field("Where found") {
-                    TextField("Estate sale, Memphis TN", text: binding(\.whereFound))
+                    TextField(post?.collection?.whereFound ?? "Estate sale, Memphis TN", text: binding(\.whereFound))
                         .textFieldStyle(.roundedBorder)
                 }
                 field("Date acquired") {
-                    TextField("2024-03-15", text: binding(\.dateFound))
+                    TextField(post?.collection?.dateFound ?? "2024-03-15", text: binding(\.dateFound))
                         .textFieldStyle(.roundedBorder)
                 }
+            }
+            if let collection = post?.collection {
+                Text("Left blank, these come from its collection, \(collection.name).")
+                    .font(.caption)
+                    .foregroundStyle(Theme.inkMuted)
             }
         }
     }
@@ -462,7 +492,7 @@ struct SitePostView: View {
                         .foregroundStyle(Theme.attention)
                         .lineLimit(3)
                 }
-                Text("Pushing creates the post unpublished, with a catalog number from the site. Publish it from the site’s admin.")
+                Text("Pushing creates the post unpublished, with a catalog number from the site. Publish it here once you’ve checked it on the site.")
                     .font(.callout)
                     .foregroundStyle(Theme.inkMuted)
                     .lineLimit(3)
@@ -649,7 +679,7 @@ private struct ReferenceBox: View {
 }
 
 /// A small copy of a photo, made off the main thread so large photos don't stall typing.
-private struct Thumbnail: View {
+struct Thumbnail: View {
     let url: URL?
     @State private var image: NSImage?
 

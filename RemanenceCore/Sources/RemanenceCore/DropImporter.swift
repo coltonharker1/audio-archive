@@ -20,6 +20,9 @@ public struct DropImporter: Sendable {
         "wav", "mp3", "m4a", "flac", "aiff", "aif", "aac", "ogg", "opus", "caf",
     ]
 
+    /// Numbers the site is using that no tape here has, so new tapes don't take them.
+    public var reservedNumbers: Set<String> = []
+
     public init(database: AppDatabase, paths: LibraryPaths, hasModel: @escaping @Sendable (String) -> Bool) {
         self.database = database
         self.paths = paths
@@ -137,6 +140,7 @@ public struct DropImporter: Sendable {
                     titleIsProvisional: titleIsProvisional,
                     createdAt: now
                 )
+                tape.catalogNumber = try Library.nextCatalogNumber(db, excluding: reservedNumbers)
                 try tape.insert(db)
 
                 for (position, item) in items.enumerated() {

@@ -48,7 +48,10 @@ extension Library {
 
     /// Creates the tape before any audio arrives, so a crash leaves a record that
     /// says a recording was underway and where to find it.
-    public func beginCapture(machine: Machine?, title: String?, speed: String?, now: Date = Date()) async throws -> CaptureTarget {
+    public func beginCapture(
+        machine: Machine?, title: String?, speed: String?, collectionID: Int64? = nil,
+        excludingNumbers taken: Set<String> = [], now: Date = Date()
+    ) async throws -> CaptureTarget {
         let uuid = UUID().uuidString
         let name = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return try await database.writer.write { [paths] db in
@@ -64,7 +67,13 @@ extension Library {
                 titleIsProvisional: name.isEmpty,
                 createdAt: now
             )
+            // Its number is fixed now, so the box can be labelled while it's recording.
+            tape.catalogNumber = try Self.nextCatalogNumber(db, excluding: taken)
             try tape.insert(db)
+            // Filing it is a nicety. It never stops a recording from starting.
+            if let collectionID, let id = tape.id {
+                try? Self.setCollection(db, tapeID: id, collectionID: collectionID)
+            }
             return try Self.addCaptureSource(db, paths: paths, tape: tape, side: "A", position: 0)
         }
     }
@@ -73,14 +82,37 @@ extension Library {
     public func beginNextSide(tapeID: Int64) async throws -> CaptureTarget {
         try await database.writer.write { [paths] db in
             guard let tape = try Tape.fetchOne(db, key: tapeID) else { throw PipelineError.missingRecord }
-            let count = try Source.filter(Column("tape_id") == tapeID).fetchCount(db)
-            let side = String(UnicodeScalar(UInt8(65 + min(count, 25))))
-            return try Self.addCaptureSource(db, paths: paths, tape: tape, side: side, position: count)
+            let sources = try Source.filter(Column("tape_id") == tapeID).fetchAll(db)
+            let side = Self.nextSide(after: sources)
+            let position = (sources.map(\.position).max() ?? -1) + 1
+            return try Self.addCaptureSource(db, paths: paths, tape: tape, side: side, position: position)
         }
     }
 
+    /// The side the next recording of a tape will be: the first letter none of its
+    /// sides has, so deleted and renamed sides are filled in rather than repeated.
+    public func nextSide(tapeID: Int64) async throws -> String {
+        try await database.writer.read { db in
+            Self.nextSide(after: try Source.filter(Column("tape_id") == tapeID).fetchAll(db))
+        }
+    }
+
+    static func nextSide(after sources: [Source]) -> String {
+        let used = Set(sources.compactMap { $0.side?.uppercased() })
+        let letters = (65...90).map { String(UnicodeScalar(UInt8($0))) }
+        return letters.first { !used.contains($0) } ?? "Z"
+    }
+
     private static func addCaptureSource(_ db: Database, paths: LibraryPaths, tape: Tape, side: String, position: Int) throws -> CaptureTarget {
-        let relative = "masters/\(tape.uuid)/side-\(side.lowercased()).caf"
+        // A side can be renamed, so its letter may already be some other file's name.
+        // A recording always goes to a file that has never existed.
+        let used = Set(try String.fetchAll(db, sql: "SELECT master_path FROM source"))
+        var relative = "masters/\(tape.uuid)/side-\(side.lowercased()).caf"
+        var take = 2
+        while used.contains(relative) || FileManager.default.fileExists(atPath: paths.library.appending(path: relative).path) {
+            relative = "masters/\(tape.uuid)/side-\(side.lowercased())-\(take).caf"
+            take += 1
+        }
         let url = paths.library.appending(path: relative)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
 

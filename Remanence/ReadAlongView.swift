@@ -91,6 +91,7 @@ struct ReadAlongView: View {
                 Spacer()
 
                 Button("Review", systemImage: "waveform") { model.openReview(tape) }
+                Button("Edit", systemImage: "slider.horizontal.3") { model.openEdit(tape) }
                 Button("Site Post", systemImage: "doc.richtext") { model.openPost(tape) }
 
                 if tape.tape.pushedAt == nil {

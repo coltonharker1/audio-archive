@@ -30,10 +30,11 @@ actor FakeSite: SiteAPI {
 
     /// As if someone edited the post in the site's admin.
     func editInAdmin(uuid: String, title: String? = nil, addPhoto: String? = nil, removePhotos: Bool = false) {
-        guard let entry = entries[uuid.lowercased()] else { return }
+        let key = entries[uuid.lowercased()] != nil ? uuid.lowercased() : uuid
+        guard let entry = entries[key] else { return }
         var images = removePhotos ? [] : entry.images
         if let addPhoto { images.append(.init(url: addPhoto, filename: "admin.jpg", caption: "From the admin")) }
-        entries[uuid.lowercased()] = SitePostState(
+        entries[key] = SitePostState(
             catalogNumber: entry.catalogNumber, title: title ?? entry.title, description: entry.description,
             medium: entry.medium, whereFound: entry.whereFound, dateFound: entry.dateFound,
             estimatedRecordingDate: entry.estimatedRecordingDate, published: entry.published,
@@ -55,6 +56,81 @@ actor FakeSite: SiteAPI {
 
     func existingFiles(_ hashes: [String]) async throws -> Set<String> {
         Set(files.keys).intersection(hashes)
+    }
+
+    var renumberings: [[SiteRenumber]] = []
+
+    func renumber(_ changes: [SiteRenumber]) async throws -> [SitePostState] {
+        renumberings.append(changes)
+        for change in changes {
+            guard let entry = entries[change.tapeUuid], entry.catalogNumber == change.catalogNumber,
+                  entry.updatedAt == change.expectedUpdatedAt else { throw SiteError.changedOnSite }
+        }
+        let leaving = Set(changes.map(\.catalogNumber))
+        let held = Set(entries.values.map(\.catalogNumber)).subtracting(leaving)
+        if let taken = changes.first(where: { held.contains($0.newCatalogNumber) }) {
+            throw SiteError.server(status: 409, message: "Already used by another post: \(taken.newCatalogNumber)")
+        }
+        return changes.map { change in
+            let entry = entries[change.tapeUuid]!
+            var moved = SitePostState(
+                catalogNumber: change.newCatalogNumber, title: entry.title, description: entry.description,
+                medium: entry.medium, whereFound: entry.whereFound, dateFound: entry.dateFound,
+                estimatedRecordingDate: entry.estimatedRecordingDate, published: entry.published,
+                updatedAt: tick(), tracks: entry.tracks, images: entry.images
+            )
+            moved.tapeUuid = change.tapeUuid
+            entries[change.tapeUuid] = moved
+            return moved
+        }
+    }
+
+    // MARK: Collections, as the site's /api/sync/collection behaves
+
+    var collections: [String: SiteCollectionState] = [:]
+    var collectionPushes: [SiteCollectionPush] = []
+    /// Tape UUIDs of posts the site has, for which reels can join a collection.
+    func reelUUIDs() -> Set<String> { Set(entries.values.compactMap(\.tapeUuid)) }
+
+    func touchCollection(_ uuid: String) {
+        guard let current = collections[uuid] else { return }
+        collections[uuid] = SiteCollectionState(uuid: current.uuid, slug: current.slug, name: current.name,
+                                                published: current.published, updatedAt: tick(), reels: current.reels)
+    }
+
+    func fetchCollection(uuid: String) async throws -> SiteCollectionState {
+        guard let found = collections[uuid.lowercased()] else { throw SiteError.server(status: 404, message: "No collection with that uuid") }
+        return found
+    }
+
+    func saveCollection(_ push: SiteCollectionPush) async throws -> SiteCollectionState {
+        collectionPushes.append(push)
+        let uuid = push.content.uuid
+        let existing = collections[uuid]
+        if let existing, existing.updatedAt != push.expectedUpdatedAt { throw SiteError.changedOnSite }
+        if existing == nil, push.expectedUpdatedAt != nil { throw SiteError.server(status: 404, message: "This collection isn't on the site anymore.") }
+        if let existing, existing.published, existing.slug != push.content.slug {
+            throw SiteError.server(status: 409, message: "its address can't change")
+        }
+        for image in push.content.images where files[image.sha256] == nil {
+            throw SiteError.server(status: 409, message: "Some photos aren't uploaded")
+        }
+        let known = reelUUIDs()
+        var state = SiteCollectionState(
+            uuid: uuid, slug: push.content.slug, name: push.content.name,
+            published: push.published ?? existing?.published ?? false, updatedAt: tick(),
+            images: push.content.images.map { .init(url: url($0.sha256), filename: $0.filename, caption: $0.caption, sha256: $0.sha256) },
+            reels: push.content.reels.filter(known.contains).map { .init(tapeUuid: $0, catalogNumber: entries[$0]?.catalogNumber ?? "", published: false) }
+        )
+        collections[uuid] = state
+        state.missingReels = push.content.reels.filter { !known.contains($0) }
+        return state
+    }
+
+    func deleteCollection(uuid: String, expectedUpdatedAt: String) async throws {
+        guard let existing = collections[uuid.lowercased()] else { throw SiteError.server(status: 404, message: "No collection") }
+        guard existing.updatedAt == expectedUpdatedAt else { throw SiteError.changedOnSite }
+        collections[uuid.lowercased()] = nil
     }
 
     func requestUpload(_ file: PushFile) async throws -> SiteUpload {
@@ -79,8 +155,11 @@ actor FakeSite: SiteAPI {
     func createEntry(_ entry: SiteEntry) async throws -> SitePostState {
         if failCreate { throw URLError(.badServerResponse) }
         if let existing = entries[entry.tapeUuid.lowercased()] { return existing }
-        let state = SitePostState(
-            catalogNumber: "RA-\(String(format: "%03d", 8 + entries.count))",
+        if let requested = entry.catalogNumber, entries.values.contains(where: { $0.catalogNumber == requested }) {
+            throw SiteError.server(status: 409, message: "\(requested) is already used on the site")
+        }
+        var state = SitePostState(
+            catalogNumber: entry.catalogNumber ?? "RA-\(String(format: "%03d", 8 + entries.count))",
             title: entry.title, description: entry.description, medium: entry.medium,
             whereFound: entry.whereFound, dateFound: entry.dateFound,
             estimatedRecordingDate: entry.estimatedRecordingDate, updatedAt: tick(),
@@ -91,6 +170,7 @@ actor FakeSite: SiteAPI {
             },
             images: entry.images.map { .init(url: url($0.sha256), filename: $0.filename, caption: $0.caption, sha256: $0.sha256) }
         )
+        state.tapeUuid = entry.tapeUuid.lowercased()
         entries[entry.tapeUuid.lowercased()] = state
         return state
     }
@@ -133,7 +213,7 @@ actor FakeSite: SiteAPI {
                 return .init(url: url(sha), filename: image.filename, caption: image.caption, sha256: sha)
             }
         }
-        let state = SitePostState(
+        var state = SitePostState(
             catalogNumber: entry.catalogNumber,
             title: fields?.title ?? entry.title,
             description: fields?.description.map { $0 } ?? entry.description,
@@ -141,10 +221,28 @@ actor FakeSite: SiteAPI {
             whereFound: fields?.whereFound.map { $0 } ?? entry.whereFound,
             dateFound: fields?.dateFound.map { $0 } ?? entry.dateFound,
             estimatedRecordingDate: fields?.estimatedRecordingDate.map { $0 } ?? entry.estimatedRecordingDate,
-            published: entry.published, updatedAt: tick(), tracks: tracks, images: images
+            published: update.published ?? entry.published, updatedAt: tick(), tracks: tracks, images: images
         )
+        state.tapeUuid = entry.tapeUuid
         entries[key] = state
         return state
+    }
+
+    func listEntries() async throws -> [SiteEntrySummary] {
+        entries.values.map {
+            SiteEntrySummary(catalogNumber: $0.catalogNumber, title: $0.title, published: $0.published,
+                             updatedAt: $0.updatedAt, tapeUuid: $0.tapeUuid, trackCount: $0.tracks.count)
+        }.sorted { $0.catalogNumber < $1.catalogNumber }
+    }
+
+    var deleted: [String] = []
+
+    func deleteEntry(tapeUUID: String, catalogNumber: String?, expectedUpdatedAt: String) async throws {
+        let key = entries[tapeUUID.lowercased()] != nil ? tapeUUID.lowercased() : (catalogNumber ?? "")
+        guard let entry = entries[key] else { throw SiteError.server(status: 404, message: "No post") }
+        guard entry.updatedAt == expectedUpdatedAt else { throw SiteError.changedOnSite }
+        entries[key] = nil
+        deleted.append(entry.catalogNumber)
     }
 }
 
@@ -662,6 +760,57 @@ private final class StubProtocol: URLProtocol, @unchecked Sendable {
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer secret")
     }
 
+    @Test func everyPostIsListedWithItsOwner() async throws {
+        let site = client()
+        StubProtocol.handler = { _ in (200, Data(#"""
+            {"entries":[{"catalogNumber":"RA-001","title":"A","published":true,"updatedAt":"t","tapeUuid":null,
+                         "trackCount":2,"imageCount":1,"duration":61.5},
+                        {"catalogNumber":"RA-009","title":"B","published":false,"updatedAt":"u",
+                         "tapeUuid":"7d2b34b9-7add-4acf-a048-656302e614fa","trackCount":1,"imageCount":0,"duration":3}]}
+            """#.utf8)) }
+
+        let entries = try await site.listEntries()
+
+        #expect(entries.map(\.catalogNumber) == ["RA-001", "RA-009"])
+        #expect(entries[0].tapeUuid == nil)
+        #expect(entries[1].tapeUuid == "7d2b34b9-7add-4acf-a048-656302e614fa")
+        #expect(entries[0].duration == 61.5)
+        let request = try #require(StubProtocol.requests.first)
+        #expect(request.httpMethod == "GET")
+        #expect(request.url?.path == "/api/sync/entries")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer secret")
+    }
+
+    @Test func deletingSendsTheTapeAndWhenItWasRead() async throws {
+        let site = client()
+        StubProtocol.handler = { _ in (200, Data(#"{"deleted":"RA-009","removedFiles":2}"#.utf8)) }
+
+        try await site.deleteEntry(tapeUUID: "u", catalogNumber: "RA-009", expectedUpdatedAt: "t")
+
+        let request = try #require(StubProtocol.requests.first)
+        #expect(request.url?.path == "/api/sync/delete")
+        let sent = try body(request)
+        #expect(sent["catalogNumber"] as? String == "RA-009")
+        #expect(sent["expectedUpdatedAt"] as? String == "t")
+
+        StubProtocol.handler = { _ in (409, Data(#"{"error":"This post changed on the site since it was last read. Refresh it first."}"#.utf8)) }
+        await #expect(throws: SiteError.changedOnSite) {
+            try await site.deleteEntry(tapeUUID: "u", catalogNumber: "RA-009", expectedUpdatedAt: "t")
+        }
+    }
+
+    @Test func publishingIsSentOnlyWhenAsked() async throws {
+        let site = client()
+        StubProtocol.handler = { _ in (200, Data(Self.entryJSON.utf8)) }
+        var update = SiteUpdate(tapeUuid: "u", catalogNumber: "RA-008", expectedUpdatedAt: "t", fields: nil, tracks: nil, images: nil)
+        _ = try await site.updateEntry(update)
+        #expect(try body(try #require(StubProtocol.requests.last))["published"] == nil)
+
+        update.published = true
+        _ = try await site.updateEntry(update)
+        #expect(try body(try #require(StubProtocol.requests.last))["published"] as? Bool == true)
+    }
+
     @Test func updatesSendOnlyWhatChangedAndNullForCleared() async throws {
         let site = client()
         StubProtocol.handler = { _ in (200, Data(Self.entryJSON.utf8)) }
@@ -714,5 +863,362 @@ private final class StubProtocol: URLProtocol, @unchecked Sendable {
         #expect(!Pusher.isTemporary(SiteError.notConfigured))
         #expect(Pusher.isTemporary(URLError(.networkConnectionLost)))
         #expect(!Pusher.isTemporary(URLError(.cancelled)))
+    }
+}
+
+// MARK: Adjusted tracks
+
+extension PushTests {
+    private func setAdjustments(_ tape: (tapeID: Int64, sourceID: Int64, master: URL), _ adjustments: TrackAdjustments) async throws {
+        try await library.setAdjustments(sourceID: tape.sourceID, startMarkerID: nil, adjustments)
+    }
+
+    /// Decodes a file to 32-bit samples of its first channel.
+    private func samples(_ url: URL) async throws -> [Int32] {
+        let output = root.appending(path: "\(UUID().uuidString).raw")
+        let (status, _) = try await runToolCapturingOutput(KnownTools.ffmpeg, arguments: [
+            "-v", "error", "-i", url.path, "-map", "0:a:0", "-ac", "1", "-f", "s32le", "-c:a", "pcm_s32le", output.path,
+        ], timeout: .seconds(60))
+        #expect(status == 0)
+        let data = try Data(contentsOf: output)
+        return data.withUnsafeBytes { Array($0.bindMemory(to: Int32.self)) }
+    }
+
+    /// A rising tone, so playing it backwards is easy to tell apart.
+    private func addRisingTape(seconds: Int = 2) async throws -> (tapeID: Int64, sourceID: Int64, master: URL) {
+        let tape = try await addTape(seconds: seconds)
+        let (status, _) = try await runToolCapturingOutput(KnownTools.ffmpeg, arguments: [
+            "-v", "error", "-y", "-f", "lavfi", "-i", "aevalsrc=0.5*t/\(seconds)*sin(2*PI*300*t):s=96000:d=\(seconds)",
+            "-c:a", "pcm_s24le", tape.master.path,
+        ], timeout: .seconds(60))
+        #expect(status == 0)
+        return tape
+    }
+
+    @Test func adjustmentsAreRoundedAndKeptInRange() {
+        let adjusted = TrackAdjustments(gainDB: 40, speed: 0.50049, reversed: true)
+        #expect(adjusted.gainDB == 24)
+        #expect(adjusted.speed == 0.5)
+        #expect(TrackAdjustments(gainDB: 3.04).gainDB == 3)
+        #expect(TrackAdjustments(speed: 10).speed == 4)
+        #expect(TrackAdjustments.none.isNeutral)
+        #expect(!TrackAdjustments(reversed: true).isNeutral)
+        #expect(adjusted.duration(of: 60) == 120)
+    }
+
+    @Test func filtersChangeLevelAndSpeedAtTheMastersRate() {
+        #expect(TrackAdjustments.none.filters(sampleRate: 96000) == nil)
+        #expect(TrackAdjustments(reversed: true).filters(sampleRate: 96000) == nil)
+        #expect(TrackAdjustments(gainDB: 6).filters(sampleRate: 96000) == "volume=6.0dB")
+        #expect(TrackAdjustments(gainDB: -1.5, speed: 0.5).filters(sampleRate: 96000)
+            == "volume=-1.5dB,asetrate=48000,aresample=96000")
+        #expect(TrackAdjustments(speed: 1.01).filters(sampleRate: 44100) == "asetrate=44541,aresample=44100")
+    }
+
+    @Test func adjustmentsAreSavedPerTrackAndShownEverywhere() async throws {
+        let tape = try await addTape()
+        let marker = try await library.addMarker(sourceID: tape.sourceID, time: 2)
+        try await setAdjustments(tape, TrackAdjustments(gainDB: 3))
+        try await library.setAdjustments(sourceID: tape.sourceID, startMarkerID: marker, TrackAdjustments(speed: 2, reversed: true))
+
+        let post = try await library.database.writer.read { try Library.fetchPost($0, tapeID: tape.tapeID) }!
+        #expect(post.tracks.map(\.adjustments) == [TrackAdjustments(gainDB: 3), TrackAdjustments(speed: 2, reversed: true)])
+        #expect(post.tracks.map(\.duration) == [2, 2])
+
+        let plan = try await library.pushPlan(tapeID: tape.tapeID)
+        #expect(plan.tracks.map(\.duration) == [2, 2])
+        #expect(plan.duration == 4)
+    }
+
+    @Test func tapesOnTheSiteCantBeAdjusted() async throws {
+        let tape = try await addTape(pushed: true)
+        await #expect(throws: AdjustmentError.alreadyOnSite) {
+            try await setAdjustments(tape, TrackAdjustments(gainDB: 3))
+        }
+    }
+
+    @Test(.enabled(if: hasTools)) func slowedTracksPlayLongerAtTheMastersRateAndDepth() async throws {
+        let tape = try await addTape(seconds: 2)
+        try await setAdjustments(tape, TrackAdjustments(speed: 0.5))
+        let files = try await madeFiles(tapeID: tape.tapeID)
+        let flac = try await probe(files.first { $0.pathExtension == "flac" }!)
+        #expect(abs(flac.duration - 4) < 0.01)
+        #expect(flac.sampleRate == 96000)
+        #expect(flac.bitDepth == 24)
+        let mp3 = try await probe(files.first { $0.pathExtension == "mp3" }!)
+        #expect(abs(mp3.duration - 4) < 0.1)
+        #expect(mp3.sampleRate == 44100)
+    }
+
+    @Test(.enabled(if: hasTools)) func levelChangesMakeItLouder() async throws {
+        let tape = try await addTape(seconds: 1)
+        let plain = try await samples(tape.master)
+        try await setAdjustments(tape, TrackAdjustments(gainDB: 6))
+        let flac = try await madeFiles(tapeID: tape.tapeID).first { $0.pathExtension == "flac" }!
+        let louder = try await samples(flac)
+        let ratio = Double(louder.map { abs(Int64($0)) }.max()!) / Double(plain.map { abs(Int64($0)) }.max()!)
+        #expect(abs(ratio - 1.995) < 0.01)
+    }
+
+    @Test(.enabled(if: hasTools)) func reversedTracksAreTheMasterBackwards() async throws {
+        let tape = try await addRisingTape()
+        let marker = try await library.addMarker(sourceID: tape.sourceID, time: 1)
+        try await library.setAdjustments(sourceID: tape.sourceID, startMarkerID: marker, TrackAdjustments(reversed: true))
+        let master = try await samples(tape.master)
+        let flacs = try await madeFiles(tapeID: tape.tapeID).filter { $0.pathExtension == "flac" }
+        #expect(flacs.count == 2)
+
+        // The second second of the master, sample for sample, in reverse.
+        let expected = Array(master[96000..<192000].reversed())
+        var matched = false
+        for flac in flacs where try await samples(flac) == expected { matched = true }
+        #expect(matched)
+
+        // The working copy goes once the files are made, and the master is untouched.
+        let uuid = try await fetchTape(tape.tapeID)!.uuid
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: library.pushFolder(tapeUUID: uuid).path)
+        #expect(!leftovers.contains { $0.hasSuffix(".caf") })
+        #expect(try await samples(tape.master) == master)
+    }
+
+    @Test(.enabled(if: hasTools)) func changingAdjustmentsMakesNewFiles() async throws {
+        let tape = try await addTape(seconds: 1)
+        let before = try await madeFiles(tapeID: tape.tapeID).filter { $0.pathExtension == "flac" }
+        let plainHash = try sha256(of: before[0])
+        try await setAdjustments(tape, TrackAdjustments(gainDB: -3))
+        let after = try await madeFiles(tapeID: tape.tapeID).filter { $0.pathExtension == "flac" }
+        let adjusted = after.first { $0.lastPathComponent != before[0].lastPathComponent }
+        #expect(adjusted != nil)
+        #expect(try adjusted.map { try sha256(of: $0) } != plainHash)
+    }
+}
+
+// MARK: Appended tracks
+
+extension PushTests {
+    /// A six-second tape in three two-second tracks, with the markers that start the
+    /// second and third.
+    private func threeTracks() async throws -> (tape: (tapeID: Int64, sourceID: Int64, master: URL), second: Int64, third: Int64) {
+        let tape = try await addRisingTape(seconds: 6)
+        let second = try await library.addMarker(sourceID: tape.sourceID, time: 2, trackName: "Two")
+        let third = try await library.addMarker(sourceID: tape.sourceID, time: 4, trackName: "Three")
+        try await library.saveTrack(sourceID: tape.sourceID, startMarkerID: nil, name: "One")
+        return (tape, second, third)
+    }
+
+    private func post(_ tapeID: Int64) async throws -> SitePost {
+        try await library.database.writer.read { try Library.fetchPost($0, tapeID: tapeID) }!
+    }
+
+    @Test(.enabled(if: hasTools)) func anAppendedTrackPlaysAfterTheOneItWasDroppedOn() async throws {
+        let (tape, _, third) = try await threeTracks()
+        try await library.appendTrack(sourceID: tape.sourceID, startMarkerID: nil, to: tape.sourceID, targetMarkerID: third)
+
+        let tracks = try await post(tape.tapeID).tracks
+        #expect(tracks.map(\.name) == ["Two", "Three"])
+        #expect(tracks[1].continuations.map(\.name) == ["One"])
+        #expect(tracks[1].duration == 4)
+        #expect(tracks[1].pieces.map(\.start) == [4, 0])
+
+        let plan = try await library.pushPlan(tapeID: tape.tapeID)
+        #expect(plan.tracks.count == 2)
+        #expect(plan.duration == 6)
+    }
+
+    @Test(.enabled(if: hasTools)) func aJoinedTrackIsItsPiecesEndToEnd() async throws {
+        let (tape, _, third) = try await threeTracks()
+        try await library.appendTrack(sourceID: tape.sourceID, startMarkerID: nil, to: tape.sourceID, targetMarkerID: third)
+        let master = try await samples(tape.master)
+
+        let flacs = try await madeFiles(tapeID: tape.tapeID).filter { $0.pathExtension == "flac" }
+        #expect(flacs.count == 2)
+        let joined = try #require(flacs.first { $0.lastPathComponent.hasPrefix("joined-") })
+        let details = try await probe(joined)
+        #expect(abs(details.duration - 4) < 0.001)
+        #expect(details.sampleRate == 96000)
+        #expect(details.bitDepth == 24)
+        // Seconds 4–6 of the master, then seconds 0–2, sample for sample.
+        #expect(try await samples(joined) == Array(master[384000..<576000]) + Array(master[0..<192000]))
+        #expect(try await samples(tape.master) == master)
+    }
+
+    @Test(.enabled(if: hasTools)) func eachPieceKeepsItsOwnSettings() async throws {
+        let (tape, _, third) = try await threeTracks()
+        try await library.setAdjustments(sourceID: tape.sourceID, startMarkerID: nil, TrackAdjustments(speed: 0.5))
+        try await library.appendTrack(sourceID: tape.sourceID, startMarkerID: nil, to: tape.sourceID, targetMarkerID: third)
+        #expect(try await library.pushPlan(tapeID: tape.tapeID).tracks[1].duration == 6)
+        let joined = try await madeFiles(tapeID: tape.tapeID).first { $0.lastPathComponent.hasPrefix("joined-") && $0.pathExtension == "flac" }!
+        let duration = try await probe(joined).duration
+        #expect(abs(duration - 6) < 0.01)
+    }
+
+    @Test(.enabled(if: hasTools)) func appendingGoesOnTheEndAndBringsWhatFollows() async throws {
+        let (tape, second, third) = try await threeTracks()
+        // Two onto One, then Three onto One: One, Two, Three as one track.
+        try await library.appendTrack(sourceID: tape.sourceID, startMarkerID: second, to: tape.sourceID, targetMarkerID: nil)
+        try await library.appendTrack(sourceID: tape.sourceID, startMarkerID: third, to: tape.sourceID, targetMarkerID: nil)
+        var tracks = try await post(tape.tapeID).tracks
+        #expect(tracks.count == 1)
+        #expect(tracks[0].pieces.map(\.name) == ["One", "Two", "Three"])
+
+        // Two can't go onto Three, which already plays after it, nor onto itself.
+        await #expect(throws: AppendError.ontoItself) {
+            try await library.appendTrack(sourceID: tape.sourceID, startMarkerID: nil, to: tape.sourceID, targetMarkerID: third)
+        }
+        await #expect(throws: AppendError.ontoItself) {
+            try await library.appendTrack(sourceID: tape.sourceID, startMarkerID: second, to: tape.sourceID, targetMarkerID: second)
+        }
+
+        // Detaching Two leaves Three with One.
+        try await library.detachTrack(sourceID: tape.sourceID, startMarkerID: second)
+        tracks = try await post(tape.tapeID).tracks
+        #expect(tracks.map { $0.pieces.map(\.name) } == [["One", "Three"], ["Two"]])
+    }
+
+    @Test(.enabled(if: hasTools)) func removingTheTrackItFollowedFreesAPiece() async throws {
+        let (tape, second, third) = try await threeTracks()
+        try await library.appendTrack(sourceID: tape.sourceID, startMarkerID: nil, to: tape.sourceID, targetMarkerID: third)
+        // Joining Three onto Two removes Three's row, so One stands alone again.
+        try await library.deleteMarker(id: third)
+        let tracks = try await post(tape.tapeID).tracks
+        #expect(tracks.map { $0.pieces.map(\.name) } == [["One"], ["Two"]])
+        _ = second
+    }
+
+    @Test func tracksOfAPushedTapeCantBeAppended() async throws {
+        let tape = try await addTape(pushed: true)
+        let marker = try await library.addMarker(sourceID: tape.sourceID, time: 2)
+        await #expect(throws: AppendError.alreadyOnSite) {
+            try await library.appendTrack(sourceID: tape.sourceID, startMarkerID: nil, to: tape.sourceID, targetMarkerID: marker)
+        }
+    }
+
+    @Test func appendedTracksThatLoopStayApart() {
+        func track(_ id: Int64) -> PostTrack {
+            var track = PostTrack(sourceID: 1, startMarkerID: id, name: "\(id)", description: nil, start: 0, end: 1, summaryShort: nil, summaryLong: nil)
+            track.trackID = id
+            return track
+        }
+        let joined = Library.joinAppended([track(1), track(2), track(3)], parents: [1: 2, 2: 1, 3: 99])
+        #expect(joined.map(\.trackID) == [1, 2, 3])
+        let anyJoined = joined.contains { !$0.continuations.isEmpty }
+        #expect(!anyJoined)
+    }
+}
+
+// MARK: Track order
+
+extension PushTests {
+    private func names(_ tapeID: Int64) async throws -> [[String?]] {
+        try await library.database.writer.read { try Library.fetchPost($0, tapeID: tapeID) }!.tracks.map { $0.pieces.map(\.name) }
+    }
+
+    @Test(.enabled(if: hasTools)) func tracksCanBeMovedAndThePushFollows() async throws {
+        let tape = try await addRisingTape(seconds: 6)
+        let second = try await library.addMarker(sourceID: tape.sourceID, time: 2, trackName: "Two")
+        let third = try await library.addMarker(sourceID: tape.sourceID, time: 4, trackName: "Three")
+        try await library.saveTrack(sourceID: tape.sourceID, startMarkerID: nil, name: "One")
+
+        try await library.moveTrack(sourceID: tape.sourceID, startMarkerID: third, to: 0)
+        #expect(try await names(tape.tapeID) == [["Three"], ["One"], ["Two"]])
+        try await library.moveTrack(sourceID: tape.sourceID, startMarkerID: nil, to: 2)
+        #expect(try await names(tape.tapeID) == [["Three"], ["Two"], ["One"]])
+
+        let plan = try await library.pushPlan(tapeID: tape.tapeID)
+        #expect(plan.tracks.map(\.title) == ["Three", "Two", "One"])
+        #expect(plan.tracks.map(\.start) == [4, 2, 0])
+        _ = second
+    }
+
+    @Test(.enabled(if: hasTools)) func aSplitStaysNextToWhereItCameFrom() async throws {
+        let tape = try await addRisingTape(seconds: 6)
+        let second = try await library.addMarker(sourceID: tape.sourceID, time: 3, trackName: "Two")
+        try await library.saveTrack(sourceID: tape.sourceID, startMarkerID: nil, name: "One")
+        try await library.moveTrack(sourceID: tape.sourceID, startMarkerID: second, to: 0)
+
+        // Splitting One makes a new track, which plays straight after One.
+        try await library.addMarker(sourceID: tape.sourceID, time: 1, trackName: "One, later")
+        #expect(try await names(tape.tapeID) == [["Two"], ["One"], ["One, later"]])
+    }
+
+    @Test(.enabled(if: hasTools)) func movingAnAppendedPieceMakesItATrackAgain() async throws {
+        let tape = try await addRisingTape(seconds: 6)
+        let second = try await library.addMarker(sourceID: tape.sourceID, time: 2, trackName: "Two")
+        let third = try await library.addMarker(sourceID: tape.sourceID, time: 4, trackName: "Three")
+        try await library.saveTrack(sourceID: tape.sourceID, startMarkerID: nil, name: "One")
+        try await library.appendTrack(sourceID: tape.sourceID, startMarkerID: nil, to: tape.sourceID, targetMarkerID: third)
+        #expect(try await names(tape.tapeID) == [["Two"], ["Three", "One"]])
+
+        try await library.moveTrack(sourceID: tape.sourceID, startMarkerID: nil, to: 0)
+        #expect(try await names(tape.tapeID) == [["One"], ["Two"], ["Three"]])
+        _ = second
+    }
+
+    @Test func pushedTapesKeepTheirOrder() async throws {
+        let tape = try await addTape(pushed: true)
+        await #expect(throws: AppendError.alreadyOnSite) {
+            try await library.moveTrack(sourceID: tape.sourceID, startMarkerID: nil, to: 1)
+        }
+    }
+}
+
+// MARK: Cuts
+
+extension PushTests {
+    private func pieces(_ tapeID: Int64) async throws -> [PostTrack] {
+        try await library.database.writer.read { try Library.fetchPost($0, tapeID: tapeID) }!.tracks.flatMap(\.pieces)
+    }
+
+    @Test(.enabled(if: hasTools)) func aCutTrackPushesOnlyWhatsKept() async throws {
+        let tape = try await addRisingTape(seconds: 6)
+        let second = try await library.addMarker(sourceID: tape.sourceID, time: 3, trackName: "Two")
+        try await library.setCuts(sourceID: tape.sourceID, startMarkerID: second, start: 0.5, end: 1)
+        let master = try await samples(tape.master)
+
+        let tracks = try await pieces(tape.tapeID)
+        #expect(tracks.map(\.start) == [0, 3.5])
+        #expect(tracks.map(\.end) == [3, 5])
+        #expect(tracks[1].spanStart == 3 && tracks[1].spanEnd == 6)
+        let plan = try await library.pushPlan(tapeID: tape.tapeID)
+        #expect(plan.duration == 4.5)
+
+        let flacs = try await madeFiles(tapeID: tape.tapeID).filter { $0.pathExtension == "flac" }
+        var matched = false
+        for flac in flacs where try await samples(flac) == Array(master[336000..<480000]) { matched = true }
+        #expect(matched)
+        #expect(try await samples(tape.master) == master)
+    }
+
+    @Test func cutsFollowTheirAudioThroughSplitsAndJoins() async throws {
+        let tape = try await addTape(seconds: 10)
+        try await library.setCuts(sourceID: tape.sourceID, startMarkerID: nil, start: 1, end: 2)
+
+        // Splitting keeps the end's cut on the new track's end.
+        let marker = try await library.addMarker(sourceID: tape.sourceID, time: 5)
+        var tracks = try await pieces(tape.tapeID)
+        #expect(tracks.map(\.start) == [1, 5])
+        #expect(tracks.map(\.end) == [5, 8])
+
+        // Joining gives it back to the track before.
+        try await library.deleteMarker(id: marker)
+        tracks = try await pieces(tape.tapeID)
+        #expect(tracks.map(\.start) == [1])
+        #expect(tracks.map(\.end) == [8])
+    }
+
+    @Test func aCutMustLeaveSomethingAndNotOnAPushedTape() async throws {
+        let tape = try await addTape(seconds: 4)
+        await #expect(throws: MarkerError.invalidTrim) {
+            try await library.setCuts(sourceID: tape.sourceID, startMarkerID: nil, start: 2, end: 1.8)
+        }
+        await #expect(throws: MarkerError.invalidTrim) {
+            try await library.setCuts(sourceID: tape.sourceID, startMarkerID: nil, start: -1, end: 0)
+        }
+        try await library.database.writer.write { db in
+            try db.execute(sql: "UPDATE tape SET pushed_at = ? WHERE id = ?", arguments: [Date(), tape.tapeID])
+        }
+        await #expect(throws: AppendError.alreadyOnSite) {
+            try await library.setCuts(sourceID: tape.sourceID, startMarkerID: nil, start: 1, end: 0)
+        }
     }
 }

@@ -38,6 +38,8 @@ public struct SitePostState: Codable, Equatable, Sendable {
         }
     }
 
+    /// The tape that made the post, for posts the app made.
+    public var tapeUuid: String? = nil
     public let catalogNumber: String
     public let title: String
     public let description: String?
@@ -207,8 +209,8 @@ extension SiteChanges {
             blankToNil(local) == blankToNil(site) ? nil : .some(blankToNil(local))
         }
         changes.fields.description = compare(tape.description, fields.description)
-        changes.fields.whereFound = compare(tape.whereFound, fields.whereFound)
-        changes.fields.dateFound = compare(tape.dateFound, fields.dateFound)
+        changes.fields.whereFound = compare(post.whereFound, fields.whereFound)
+        changes.fields.dateFound = compare(post.dateFound, fields.dateFound)
         changes.fields.estimatedRecordingDate = compare(tape.era, fields.estimatedRecordingDate)
 
         let local = Dictionary(post.tracks.map { (TrackKey($0.sourceID, $0.startMarkerID), $0) }, uniquingKeysWith: { first, _ in first })
@@ -411,8 +413,13 @@ extension Pusher {
                 tape.description = blankToNil(state.description)
                 tape.medium = SiteMedium(rawValue: state.medium)?.label ?? tape.medium
                 tape.era = blankToNil(state.estimatedRecordingDate)
-                tape.whereFound = blankToNil(state.whereFound)
-                tape.dateFound = blankToNil(state.dateFound)
+                // What the site has from the collection stays the collection's.
+                func own(_ site: String?, inherited: String?, current: String?) -> String? {
+                    let site = blankToNil(site)
+                    return current == nil && site != nil && site == inherited ? nil : site
+                }
+                tape.whereFound = own(state.whereFound, inherited: post.collection?.whereFound, current: tape.whereFound)
+                tape.dateFound = own(state.dateFound, inherited: post.collection?.dateFound, current: tape.dateFound)
                 tape.catalogNumber = state.catalogNumber
                 tape.siteUpdatedAt = state.updatedAt
                 tape.siteSnapshot = snapshot.encoded
@@ -562,4 +569,5 @@ public struct SiteUpdate: Encodable, Equatable, Sendable {
     public let fields: SiteChanges.Fields?
     public let tracks: [SiteChanges.TrackText]?
     public let images: [SiteChanges.Image]?
+    public var published: Bool? = nil
 }

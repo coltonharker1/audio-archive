@@ -74,9 +74,31 @@ public struct PostTrack: Identifiable, Equatable, Sendable {
     public let summaryShort: String?
     public let summaryLong: String?
     public var estimatedEra: String? = nil
+    public var adjustments: TrackAdjustments = .none
+    /// The stored track row, when there is one.
+    public var trackID: Int64? = nil
+    /// Tracks appended to this one, in the order they play after it. Each keeps its
+    /// own level, speed and direction.
+    public var continuations: [PostTrack] = []
+    /// Master seconds left out at each end, in recording order. `start` and `end`
+    /// are what's kept; the whole stretch runs from `start - cutStart`.
+    public var cutStart: Double = 0
+    public var cutEnd: Double = 0
+    public var spanStart: Double { start - cutStart }
+    public var spanEnd: Double { end + cutEnd }
+    public var isCut: Bool { cutStart > 0 || cutEnd > 0 }
 
     public var id: String { "\(sourceID)-\(startMarkerID ?? 0)" }
-    public var duration: Double { end - start }
+    /// How long this piece plays on its own, at its adjusted speed.
+    public var pieceDuration: Double { adjustments.duration(of: end - start) }
+    /// How long it plays, at its adjusted speed, with anything appended to it.
+    public var duration: Double { pieceDuration + continuations.reduce(0) { $0 + $1.pieceDuration } }
+    /// This track and everything appended to it, each as a piece on its own.
+    public var pieces: [PostTrack] {
+        var head = self
+        head.continuations = []
+        return [head] + continuations
+    }
 }
 
 /// Everything the site will show for a tape.
@@ -84,6 +106,12 @@ public struct SitePost: Equatable, Sendable {
     public let tape: Tape
     public let tracks: [PostTrack]
     public let images: [TapeImage]
+    /// The collection the tape came in, if any.
+    public var collection: TapeCollection? = nil
+
+    /// Where and when it was found: its own, or else its collection's.
+    public var whereFound: String? { tape.whereFound ?? collection?.whereFound }
+    public var dateFound: String? { tape.dateFound ?? collection?.dateFound }
 
     /// Claude's guess at when it was recorded.
     public var eraReference: String? {
@@ -144,26 +172,94 @@ extension Library {
         guard let tape = try Tape.fetchOne(db, key: tapeID) else { return nil }
         let sources = try Source.filter(Column("tape_id") == tapeID).order(Column("position")).fetchAll(db)
         var tracks: [PostTrack] = []
+        var parents: [Int64: Int64] = [:]
+        var orders: [Double?] = []
         for source in sources {
             guard let id = source.id, let review = try fetchReview(db, sourceID: id) else { continue }
             for span in review.tracks {
                 let stored = try span.trackID.flatMap { try Track.fetchOne(db, key: $0) }
                 let details = stored?.summaryDetails
-                tracks.append(PostTrack(
+                // A cut that leaves too little, after a marker moved, is ignored.
+                let fits = span.end - span.start - span.cutStart - span.cutEnd >= minimumKeptLength
+                let cutStart = fits ? span.cutStart : 0, cutEnd = fits ? span.cutEnd : 0
+                var track = PostTrack(
                     sourceID: id,
                     startMarkerID: span.markerID,
                     name: span.name,
                     description: stored?.description,
-                    start: span.start,
-                    end: span.end,
+                    start: span.start + cutStart,
+                    end: span.end - cutEnd,
                     summaryShort: details?.summaryShort ?? stored?.summaryShort,
                     summaryLong: details?.summaryLong,
-                    estimatedEra: details?.estimatedEra
-                ))
+                    estimatedEra: details?.estimatedEra,
+                    adjustments: span.adjustments
+                )
+                track.trackID = stored?.id
+                track.cutStart = cutStart
+                track.cutEnd = cutEnd
+                if let stored, let id = stored.id, let parent = stored.appendedToTrackId { parents[id] = parent }
+                tracks.append(track)
+                orders.append(stored?.sortIndex)
             }
         }
         let images = try TapeImage.filter(Column("tape_id") == tapeID).order(Column("position")).fetchAll(db)
-        return SitePost(tape: tape, tracks: tracks, images: images)
+        let ordered = order(tracks, sortIndexes: orders)
+        var post = SitePost(tape: tape, tracks: joinAppended(ordered, parents: parents), images: images)
+        post.collection = try collection(db, of: tape)
+        return post
+    }
+
+    /// Puts tracks in their site order. Tracks never moved follow the one before them
+    /// on the same recording, so a split stays next to where it came from, and a
+    /// recording added later goes at the end. With nothing moved, it's recording order.
+    static func order(_ tracks: [PostTrack], sortIndexes: [Double?]) -> [PostTrack] {
+        guard sortIndexes.contains(where: { $0 != nil }) else { return tracks }
+        let last = (sortIndexes.compactMap(\.self).max() ?? 0) + 1
+        var effective: [Double] = []
+        var previousOnSource: [Int64: Double] = [:]
+        for (index, track) in tracks.enumerated() {
+            let value = sortIndexes[index]
+                ?? previousOnSource[track.sourceID].map { $0 + 0.001 }
+                ?? last + Double(index)
+            effective.append(value)
+            previousOnSource[track.sourceID] = value
+        }
+        return tracks.indices.sorted { effective[$0] != effective[$1] ? effective[$0] < effective[$1] : $0 < $1 }.map { tracks[$0] }
+    }
+
+    /// Folds appended tracks into the tracks they follow. A track whose parent isn't
+    /// on this tape, or that would loop back on itself, stays a track of its own.
+    static func joinAppended(_ tracks: [PostTrack], parents: [Int64: Int64]) -> [PostTrack] {
+        let present = Set(tracks.compactMap(\.trackID))
+        func root(of id: Int64) -> Int64? {
+            var seen: Set<Int64> = [id]
+            var current = id
+            while let parent = parents[current], present.contains(parent) {
+                guard seen.insert(parent).inserted else { return nil }
+                current = parent
+            }
+            return current == id ? nil : current
+        }
+        var children: [Int64: [Int64]] = [:]
+        var appended: Set<Int64> = []
+        for track in tracks {
+            guard let id = track.trackID, let parent = parents[id], present.contains(parent), root(of: id) != nil else { continue }
+            children[parent, default: []].append(id)
+            appended.insert(id)
+        }
+        let byID = Dictionary(uniqueKeysWithValues: tracks.compactMap { track in track.trackID.map { ($0, track) } })
+        func following(_ id: Int64) -> [PostTrack] {
+            (children[id] ?? []).flatMap { child -> [PostTrack] in
+                guard let track = byID[child] else { return [] }
+                return [track] + following(child)
+            }
+        }
+        return tracks.compactMap { track in
+            if let id = track.trackID, appended.contains(id) { return nil }
+            var head = track
+            if let id = track.trackID { head.continuations = following(id) }
+            return head
+        }
     }
 
     public func postUpdates(tapeID: Int64) -> AsyncValueObservation<SitePost?> {

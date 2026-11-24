@@ -33,6 +33,8 @@ final class ReviewModel {
     }
 
     private var player: AudioPlayer { app.player }
+    @ObservationIgnored private let scrubVoice = TapeScrubVoice()
+    @ObservationIgnored private var resumeAfterScrub = false
     var duration: Double { review?.source.duration ?? 0 }
     var maximumSpan: Double { max(Self.minimumSpan, duration) }
     var selectedMarker: Marker? {
@@ -97,11 +99,32 @@ final class ReviewModel {
         Task { await player.seek(to: clamped) }
     }
 
-    /// Moves the playhead while dragging. Seeks are dropped while one's in flight,
-    /// so a long tape keeps up with the pointer.
+    /// Moves the playhead while dragging, and plays what's under the pointer. Seeks
+    /// are dropped while one's in flight, so a long tape keeps up with the pointer.
     func scrub(to time: Double) {
         cancelHearing()
-        player.scrubLive(to: max(0, min(duration, time)))
+        let clamped = max(0, min(duration, time))
+        if !scrubVoice.isScrubbing, let url = player.currentURL {
+            resumeAfterScrub = player.isPlaying
+            player.pause()
+            scrubVoice.begin(url)
+        }
+        scrubVoice.move(to: clamped)
+        player.scrubLive(to: clamped)
+    }
+
+    /// Ends a drag. Playing carries on from where it let go, if it was playing.
+    func endScrub() {
+        guard scrubVoice.isScrubbing else { return }
+        scrubVoice.end()
+        if resumeAfterScrub {
+            resumeAfterScrub = false
+            let time = player.preciseTime
+            Task {
+                await player.seek(to: time)
+                player.play()
+            }
+        }
     }
 
     func togglePlayback() {

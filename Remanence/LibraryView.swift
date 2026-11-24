@@ -4,26 +4,59 @@ import SwiftUI
 struct LibraryView: View {
     @Environment(AppModel.self) private var model
     @State private var isDropTargeted = false
+    @State private var showsSitePosts = false
+    @State private var showsCatalog = false
+    @State private var namingCollection = false
+    @State private var newCollectionName = ""
     @FocusState private var isSearchFocused: Bool
 
     var body: some View {
         @Bindable var model = model
 
         NavigationSplitView {
-            List(ShelfFilter.allCases, selection: Binding(
-                get: { model.filter },
-                set: { if let filter = $0 { model.filter = filter } }
-            )) { filter in
-                HStack {
-                    Text(filter.rawValue)
-                    Spacer()
-                    Text("\(model.shelf.filter(filter.includes).count)")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
+            List(selection: Binding(
+                get: { model.sidebarSelection },
+                set: { if let item = $0 { model.sidebarSelection = item } }
+            )) {
+                Section("Library") {
+                    ForEach(ShelfFilter.allCases) { filter in
+                        HStack {
+                            Text(filter.rawValue)
+                            Spacer()
+                            Text("\(model.shelf.filter(filter.includes).count)")
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                        .tag(SidebarItem.filter(filter))
+                    }
                 }
-                .tag(filter)
+                Section("Collections") {
+                    ForEach(model.collections) { collection in
+                        CollectionSidebarRow(collection: collection)
+                            .tag(SidebarItem.collection(collection.id))
+                    }
+                    Button {
+                        newCollectionName = ""
+                        namingCollection = true
+                    } label: {
+                        Label("New Collection", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                }
             }
             .listStyle(.sidebar)
+            .alert("New Collection", isPresented: $namingCollection) {
+                TextField("The Cable Man", text: $newCollectionName)
+                Button("Create") {
+                    let name = newCollectionName
+                    Task { await model.createCollection(named: name) }
+                }
+                .disabled(newCollectionName.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Reels that came in the same box. Name it whatever you like.")
+            }
             .navigationSplitViewColumnWidth(min: 210, ideal: 220, max: 280)
         } detail: {
             VStack(spacing: 0) {
@@ -45,10 +78,17 @@ struct LibraryView: View {
                     if let tape = model.selectedTape {
                         ReviewView(tape: tape)
                     }
+                case .edit:
+                    if let tape = model.selectedTape {
+                        EditView(tape: tape)
+                    }
                 case .search:
                     SearchResultsView()
                 case .shelf:
-                    if model.shelf.isEmpty && model.hasLoadedShelf {
+                    if let collection = model.selectedCollection {
+                        CollectionView(collection: collection)
+                            .id(collection.id)
+                    } else if model.shelf.isEmpty && model.hasLoadedShelf {
                         EmptyShelfView()
                     } else {
                         ShelfView()
@@ -63,10 +103,20 @@ struct LibraryView: View {
         .toolbar {
             if model.route == .shelf {
                 ToolbarItem(placement: .primaryAction) {
+                    Button("Catalog", systemImage: "number") { showsCatalog = true }
+                        .help("Every reel by RA number, to match the labels on the boxes")
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Site Posts", systemImage: "globe") { showsSitePosts = true }
+                        .help("Every post on the site")
+                }
+                ToolbarItem(placement: .primaryAction) {
                     Button("Record a Tape", systemImage: "record.circle") { model.openRecording() }
                 }
             }
         }
+        .sheet(isPresented: $showsSitePosts) { SitePostsView() }
+        .sheet(isPresented: $showsCatalog) { CatalogView() }
         .searchable(text: $model.searchText, placement: .toolbar, prompt: "Search every word on every tape")
         .searchFocused($isSearchFocused)
         .onChange(of: model.searchRequested) { _, requested in
@@ -85,6 +135,46 @@ struct LibraryView: View {
             if isDropTargeted {
                 DropOverlay()
             }
+        }
+    }
+}
+
+/// A collection in the sidebar. Drop a tape on it to put the tape in it.
+private struct CollectionSidebarRow: View {
+    @Environment(AppModel.self) private var model
+    @State private var isTargeted = false
+    @State private var confirmingDelete = false
+    let collection: ShelfCollection
+
+    var body: some View {
+        HStack {
+            Label(collection.collection.name, systemImage: "shippingbox")
+                .lineLimit(1)
+            Spacer()
+            Text("\(collection.tapeIDs.count)")
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 1)
+        .background(isTargeted ? Theme.accent.opacity(0.25) : .clear, in: .rect(cornerRadius: 5))
+        .dropDestination(for: String.self) { items, _ in
+            let ids = items.compactMap(TapeDrag.tapeID)
+            let tapes = model.shelf.filter { ids.contains($0.id) }
+            guard !tapes.isEmpty else { return false }
+            let id = collection.id
+            Task { for tape in tapes { await model.setCollection(tape, to: id) } }
+            return true
+        } isTargeted: { isTargeted = $0 }
+        .contextMenu {
+            Button("Delete Collection…", role: .destructive) { confirmingDelete = true }
+        }
+        .confirmationDialog("Delete the collection “\(collection.collection.name)”?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+            Button("Delete Collection", role: .destructive) {
+                let id = collection.id
+                Task { await model.deleteCollection(id) }
+            }
+        } message: {
+            Text("Its reels stay on the shelf, outside any collection. Its write-up is removed, and its photos go to the Trash.")
         }
     }
 }

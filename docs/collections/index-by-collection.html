@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Index — Remanence Archive</title>
+  <style>
+    :root {
+      --paper: #faf5ee;
+      --ink: #211d19;
+      --muted: #625a51;
+      --rule: rgb(33 29 25 / 19%);
+      --gutter: clamp(24px, 4.3vw, 66px);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 18px/1.5 "EB Garamond", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+      font-variant-numeric: oldstyle-nums;
+      -webkit-font-smoothing: antialiased;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 5;
+      pointer-events: none;
+      opacity: .032;
+      mix-blend-mode: multiply;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Cpath fill='%23877' filter='url(%23n)' d='M0 0h220v220H0z'/%3E%3C/svg%3E");
+    }
+    a { color: inherit; text-decoration: none; }
+    a:hover, .views [aria-current], .read, footer a {
+      text-decoration: underline;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 4px;
+    }
+    :is(a,summary,input):focus-visible { outline: 1px solid var(--ink); outline-offset: 3px; }
+    ::selection { color: var(--paper); background: var(--ink); }
+    header {
+      height: 76px;
+      padding: 0 var(--gutter);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .name { font-size: 21px; letter-spacing: .005em; padding: 12px 0; }
+    header nav { display: flex; gap: 8px; margin-right: -12px; }
+    header nav a { font-size: 16.5px; padding: 12px; }
+    main {
+      padding: 56px var(--gutter) 100px
+        calc(var(--gutter) + clamp(0px,11.5vw,176px));
+    }
+    .head {
+      display: flex;
+      max-width: 886px;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 24px;
+    }
+    h1 { margin: 0; font-size: 23px; font-weight: 400; }
+    input {
+      width: 140px;
+      min-width: 0;
+      max-width: 57%;
+      padding: 6px 0 3px;
+      color: inherit;
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      border-bottom: 1px solid;
+      font: inherit;
+      appearance: none;
+    }
+    input:focus { width: 220px; }
+    input::placeholder { color: var(--ink); opacity: 1; }
+    .views { display: flex; gap: 24px; margin: 10px 0 28px; }
+    .views a { padding: 9px 0; }
+    #results { max-width: 845px; }
+    details { border-top: 1px solid var(--rule); }
+    details:last-child { border-bottom: 1px solid var(--rule); }
+    summary {
+      display: grid;
+      grid-template-columns: 20px minmax(0,1fr) auto;
+      gap: 0 10px;
+      align-items: baseline;
+      padding: 16px 0;
+      list-style: none;
+      cursor: pointer;
+    }
+    summary::-webkit-details-marker { display: none; }
+    .marker { font-size: 16px; text-align: center; }
+    .marker::before { content: "+"; }
+    details[open] > summary .marker::before { content: "−"; }
+    .group-name { font-size: 23px; line-height: 1.3; }
+    .count, .place { color: var(--muted); font-size: 16px; }
+    .count { white-space: nowrap; font-variant-numeric: lining-nums; }
+    .place { grid-column: 2 / -1; margin-top: 2px; }
+    .inside { padding: 0 0 20px 30px; }
+    .read { font-size: 17px; display: inline-block; padding: 5px 0 10px; }
+    ul { list-style: none; margin: 0; padding: 0; }
+    .row {
+      display: grid;
+      grid-template-columns: 68px minmax(0,1fr) minmax(115px,.38fr) auto;
+      gap: 12px;
+      align-items: baseline;
+      padding: 10px 0;
+      font-size: 21px;
+      line-height: 31px;
+      font-variant-numeric: lining-nums;
+    }
+    .flat .row { padding: 15px 0; }
+    .row:hover { text-decoration: none; }
+    .row:hover .title { text-decoration: underline; text-underline-offset: 4px; }
+    .no { font-size: 16px; }
+    .length { text-align: right; font-variant-numeric: lining-nums tabular-nums; }
+    footer { margin-top: 58px; }
+    @media (max-width: 720px) {
+      header { height: 68px; }
+      main { padding: 28px var(--gutter) 80px; }
+      .views { gap: 18px; margin-bottom: 20px; }
+      .group-name { font-size: 21px; }
+      summary { grid-template-columns: 14px minmax(0,1fr) auto; gap: 0 7px; }
+      .inside { padding-left: 0; }
+      .read { margin-left: 21px; }
+      .row, .flat .row {
+        grid-template-columns: 46px minmax(0,1fr) auto;
+        grid-template-areas: "no title title" ". date length";
+        gap: 0 8px;
+        font-size: 19px;
+        line-height: 26px;
+        padding: 13px 0;
+        border-bottom: 1px solid var(--rule);
+      }
+      .inside li:last-child .row { border: 0; }
+      .no { grid-area: no; }
+      .title { grid-area: title; }
+      .date { grid-area: date; }
+      .length { grid-area: length; }
+      .date, .length { font-size: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <a class="name" href="/">Remanence Archive</a>
+    <nav aria-label="Site"><a href="/recordings">Index</a><a href="/about">About</a></nav>
+  </header>
+
+  <main>
+    <div class="head">
+      <h1>Index</h1>
+      <input id="find" type="search" placeholder="Find a recording"
+             aria-label="Find a recording or collection" aria-controls="results">
+    </div>
+    <nav class="views" aria-label="Index view">
+      <a id="numbers" href="?view=number">By RA number</a>
+      <a id="collections" href="?view=collections" aria-current="page">By collection</a>
+    </nav>
+    <div id="results"></div>
+    <p id="empty" role="status" hidden>Nothing matches.</p>
+    <footer><a href="/">View objects</a></footer>
+  </main>
+
+  <script>
+    const groups = [
+      {
+        name: "The Cable Man", slug: "the-cable-man",
+        found: "Joliet, Illinois · October 2023",
+        reels: [
+          ["014", "Line check from the headend", "c. 1978", "4:16"],
+          ["019", "Station break, three endings", "c. 1978–80", "1:42"],
+          ["023", "Rain in the downspout", "Undated", "6:08"],
+          ["028", "Calls after the game", "1981", "18:37"],
+          ["031", "Doors, latches, one deadbolt", "Undated", "3:54"],
+          ["037", "Music to run under the weather", "c. 1982", "9:21"]
+        ]
+      },
+      {
+        name: "The Kitchen Window", slug: "the-kitchen-window",
+        found: "Dubuque, Iowa · April 2022",
+        reels: [
+          ["011", "The freight crossing, from upstairs", "1972", "7:11"],
+          ["025", "Supper with the window open", "c. 1973", "12:08"]
+        ]
+      },
+      {
+        name: "Reels outside collections", slug: "", found: "",
+        reels: [
+          ["008", "Piano lesson, left hand alone", "Undated", "11:05"],
+          ["022", "Last waltz at the parish hall", "1967", "8:49"]
+        ]
+      }
+    ];
+
+    const find = document.querySelector("#find");
+    const results = document.querySelector("#results");
+    const empty = document.querySelector("#empty");
+    const numbers = document.querySelector("#numbers");
+    const collections = document.querySelector("#collections");
+    const params = new URLSearchParams(location.search);
+    const byCollection = params.get("view") !== "number";
+    const initiallyOpen = groups.find(group => "#" + group.slug === location.hash);
+    const openGroups = new Set([initiallyOpen?.name || groups[0].name]);
+    find.value = params.get("q") || "";
+
+    function element(tag, className, label) {
+      const item = document.createElement(tag);
+      if (className) item.className = className;
+      if (label !== undefined) item.textContent = label;
+      return item;
+    }
+
+    function indexQuery(view) {
+      const query = new URLSearchParams({ view });
+      if (find.value) query.set("q", find.value);
+      return "?" + query;
+    }
+
+    function reelList(reels) {
+      const list = element("ul", byCollection ? "" : "flat");
+      for (const [number, title, date, length] of reels) {
+        const entry = element("li");
+        const link = element("a", "row");
+        const context = new URLSearchParams();
+        if (byCollection) context.set("view", "collections");
+        if (find.value) context.set("q", find.value);
+        link.href = "/archive/RA-" + number + (context.size ? "?" + context : "");
+
+        const recorded = element("span", "date");
+        if (date.startsWith("c. ")) {
+          recorded.append(element("i", "", "c."), " " + date.slice(3));
+        } else {
+          recorded.textContent = date;
+        }
+        link.append(element("span", "no", number), element("span", "title", title),
+          recorded, element("span", "length", length));
+        entry.append(link);
+        list.append(entry);
+      }
+      return list;
+    }
+
+    function collectionGroup(group, reels, searching) {
+      const details = element("details");
+      if (group.slug) details.id = group.slug;
+      details.open = searching || openGroups.has(group.name);
+
+      const summary = element("summary");
+      const marker = element("span", "marker");
+      marker.setAttribute("aria-hidden", "true");
+      const total = group.reels.length;
+      const count = (reels.length === total ? total : reels.length + " of " + total)
+        + (total === 1 ? " reel" : " reels");
+      summary.append(marker, element("span", "group-name", group.name),
+        element("span", "count", count));
+      if (group.found) summary.append(element("span", "place", "Found in " + group.found));
+
+      const inside = element("div", "inside");
+      if (group.slug) {
+        const read = element("a", "read", "Read collection");
+        read.href = "/collections/" + group.slug;
+        if (find.value) read.search = new URLSearchParams({ q: find.value }).toString();
+        read.setAttribute("aria-label", "Read collection, " + group.name);
+        inside.append(read);
+      }
+      inside.append(reelList(reels));
+      details.append(summary, inside);
+      details.addEventListener("toggle", () => {
+        if (searching || !details.isConnected) return;
+        if (details.open) openGroups.add(group.name);
+        else openGroups.delete(group.name);
+      });
+      return details;
+    }
+
+    function render() {
+      const words = find.value.toLowerCase().trim().split(/\s+/).filter(Boolean);
+      const flat = [];
+      results.replaceChildren();
+      numbers.href = indexQuery("number");
+      collections.href = indexQuery("collections");
+      numbers.removeAttribute("aria-current");
+      collections.removeAttribute("aria-current");
+      (byCollection ? collections : numbers).setAttribute("aria-current", "page");
+
+      for (const group of groups) {
+        const shared = (group.name + " " + group.found).toLowerCase();
+        const matches = group.reels.filter(([number, title, date]) => {
+          const text = `${shared} ra-${number} ${title} ${date}`.toLowerCase();
+          return words.every(word => text.includes(word));
+        });
+        const groupMatches = words.every(word => shared.includes(word));
+        if (byCollection && (matches.length || groupMatches)) {
+          results.append(collectionGroup(group, matches, words.length > 0));
+        }
+        flat.push(...matches);
+      }
+      if (!byCollection && flat.length) {
+        flat.sort((a, b) => Number(a[0]) - Number(b[0]));
+        results.append(reelList(flat));
+      }
+      empty.hidden = results.childElementCount > 0;
+    }
+
+    find.addEventListener("input", () => {
+      render();
+      // Keep a hosted mock shareable. Local-file previews also work offline.
+      if (location.protocol === "http:" || location.protocol === "https:") {
+        history.replaceState(null, "", indexQuery(byCollection ? "collections" : "number"));
+      }
+    });
+    render();
+  </script>
+</body>
+</html>

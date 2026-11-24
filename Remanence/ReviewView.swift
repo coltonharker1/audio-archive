@@ -243,6 +243,7 @@ private struct OverviewStrip: View {
                     review.moveZoom(to: time - review.zoomSpan / 2)
                     review.scrub(to: time)
                 }
+                .onEnded { _ in review.endScrub() }
             )
             .accessibilityElement()
             .accessibilityLabel("Whole tape")
@@ -333,6 +334,7 @@ private struct ZoomedWaveform: View {
                         review.selectedMarkerID = nil
                         review.scrub(to: time)
                     }
+                    .onEnded { _ in review.endScrub() }
             )
             .simultaneousGesture(
                 MagnifyGesture()
@@ -352,7 +354,7 @@ private struct ZoomedWaveform: View {
     }
 }
 
-private struct TimeRuler: View {
+struct TimeRuler: View {
     let start: Double
     let span: Double
     let width: CGFloat
@@ -468,8 +470,10 @@ private struct MarkerControls: View {
                     .fixedSize()
                     .help("New markers settle into the nearest quiet moment. Hold Option to place one exactly.")
                 Spacer(minLength: 4)
-                Button("Trim Start") { review.setTrimStart() }.fixedSize().help("Keep from the playhead onward")
-                Button("Trim End") { review.setTrimEnd() }.fixedSize().help("Keep up to the playhead")
+                Button("Trim Side Start") { review.setTrimStart() }.fixedSize()
+                    .help("Keep this whole side from the playhead onward. To trim one track, use Edit.")
+                Button("Trim Side End") { review.setTrimEnd() }.fixedSize()
+                    .help("Keep this whole side up to the playhead. To trim one track, use Edit.")
                 if (review.review?.trimStart ?? 0) > 0 || review.review?.source.trimEnd != nil {
                     Button("Reset") { review.resetTrim() }.fixedSize()
                 }

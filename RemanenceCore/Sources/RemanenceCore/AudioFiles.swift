@@ -27,6 +27,11 @@ func sha256(of url: URL) throws -> String {
     return hasher.finalize().map { String(format: "%02x", $0) }.joined()
 }
 
+/// SHA-256 of some bytes, as hex.
+func sha256(of data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+}
+
 struct AudioDetails: Equatable, Sendable {
     let duration: Double
     let sampleRate: Int?

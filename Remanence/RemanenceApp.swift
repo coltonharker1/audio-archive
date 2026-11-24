@@ -82,7 +82,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The event's own window is the reliable one. NSApp.keyWindow can be empty,
         // and treating that as "not typing" would swallow spaces from text fields.
         let responder = (window ?? NSApp.keyWindow)?.firstResponder
-        guard player.currentURL != nil, !(responder is NSText) else { return false }
+        guard !(responder is NSText) else { return false }
+        if model.handleEditKey(code: keyCode, characters: characters, shift: shift) { return true }
+        guard player.currentURL != nil else { return false }
 
         if model.handleReviewKey(code: keyCode, characters: characters, shift: shift) { return true }
         guard !shift else { return false }
@@ -113,6 +115,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private static func handleScroll(horizontal: CGFloat, vertical: CGFloat) -> Bool {
         let model = AppModel.shared
+        if model.route == .edit, abs(horizontal) > abs(vertical), horizontal != 0 {
+            return model.editModel.scroll(by: Double(horizontal))
+        }
         guard model.route == .review, abs(horizontal) > abs(vertical), horizontal != 0 else { return false }
         let review = model.reviewModel
         review.moveZoom(to: review.zoomStart - Double(horizontal) * review.zoomSpan / 800)
@@ -185,6 +190,7 @@ struct RootView: View {
         }
         .background(Theme.paper)
         .task { await model.observeShelf() }
+        .task { await model.observeCollections() }
         .task { await model.refresh() }
         .onChange(of: scenePhase) { _, phase in
             // Pick up tools installed in Terminal while the app was in the background.

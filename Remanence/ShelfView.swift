@@ -102,6 +102,8 @@ private struct TapeColumn: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovering = false
     @State private var confirmingDelete = false
+    @State private var namingCollection = false
+    @State private var newCollectionName = ""
 
     let tape: ShelfTape
     let objectHeight: CGFloat
@@ -146,8 +148,42 @@ private struct TapeColumn: View {
                 withAnimation(reduceMotion ? nil : .spring(duration: 0.25)) { isHovering = hovering }
             }
             .animation(reduceMotion ? nil : .spring(duration: 0.25), value: isSelected)
+            .draggable(TapeDrag.payload(tape.id)) {
+                TapeObject(tape: tape).scaleEffect(0.6)
+            }
             .contextMenu {
+                Menu("Collection") {
+                    ForEach(model.collections) { collection in
+                        Toggle(collection.collection.name, isOn: Binding(
+                            get: { tape.tape.collectionId == collection.id },
+                            set: { isOn in
+                                let id = isOn ? collection.id : nil
+                                Task { await model.setCollection(tape, to: id) }
+                            }
+                        ))
+                    }
+                    if !model.collections.isEmpty { Divider() }
+                    Button("New Collection…") {
+                        newCollectionName = ""
+                        namingCollection = true
+                    }
+                    if tape.tape.collectionId != nil {
+                        Button("Remove from Collection") { Task { await model.setCollection(tape, to: nil) } }
+                    }
+                }
+                Divider()
                 Button("Move to Trash…", role: .destructive) { confirmingDelete = true }
+            }
+            .alert("New Collection", isPresented: $namingCollection) {
+                TextField("The Cable Man", text: $newCollectionName)
+                Button("Create") {
+                    let name = newCollectionName
+                    Task { await model.createCollection(named: name, with: [tape]) }
+                }
+                .disabled(newCollectionName.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("“\(tape.tape.title)” goes in it. Add more reels by dragging them onto it in the sidebar.")
             }
 
             Text(tape.tape.title)

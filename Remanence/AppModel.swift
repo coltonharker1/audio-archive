@@ -27,8 +27,14 @@ enum ShelfFilter: String, CaseIterable, Identifiable {
     }
 }
 
+/// What the sidebar has chosen: one of the shelf's filters, or a collection.
+enum SidebarItem: Hashable {
+    case filter(ShelfFilter)
+    case collection(Int64)
+}
+
 enum Route: Equatable {
-    case shelf, search, readAlong, review, record, post
+    case shelf, search, readAlong, review, record, post, edit
 }
 
 @MainActor
@@ -63,6 +69,11 @@ final class AppModel {
     var filter = ShelfFilter.all {
         didSet { if route != .shelf { leaveToShelf() } }
     }
+    private(set) var collections: [ShelfCollection] = []
+    /// Every RA number the site is using, so new tapes never take one of them.
+    var siteNumbers: Set<String> = []
+    /// The collection shown instead of a filter, if one is chosen in the sidebar.
+    private(set) var selectedCollectionID: Int64?
     var message: String?
     var searchText = "" {
         didSet { if searchText != oldValue { runSearch() } }
@@ -72,6 +83,7 @@ final class AppModel {
     @ObservationIgnored private(set) lazy var reviewModel = ReviewModel(app: self)
     @ObservationIgnored private(set) lazy var recordModel = RecordModel(app: self)
     @ObservationIgnored private(set) lazy var pushModel = PushModel(app: self)
+    @ObservationIgnored private(set) lazy var editModel = EditModel(app: self)
     @ObservationIgnored private var searchTask: Task<Void, Never>?
     @ObservationIgnored private var queue: JobQueue?
     @ObservationIgnored private var isObservingShelf = false
@@ -95,7 +107,36 @@ final class AppModel {
         database.map { Library(database: $0, paths: paths) }
     }
 
-    var visibleTapes: [ShelfTape] { shelf.filter(filter.includes) }
+    var visibleTapes: [ShelfTape] {
+        if let collection = selectedCollection {
+            let byID = Dictionary(uniqueKeysWithValues: shelf.map { ($0.id, $0) })
+            return collection.tapeIDs.compactMap { byID[$0] }
+        }
+        return shelf.filter(filter.includes)
+    }
+
+    var sidebarSelection: SidebarItem {
+        get { selectedCollectionID.map(SidebarItem.collection) ?? .filter(filter) }
+        set {
+            switch newValue {
+            case .filter(let chosen):
+                selectedCollectionID = nil
+                filter = chosen
+            case .collection(let id):
+                selectedCollectionID = id
+                if route != .shelf { leaveToShelf() }
+            }
+        }
+    }
+
+    var selectedCollection: ShelfCollection? {
+        collections.first { $0.id == selectedCollectionID }
+    }
+
+    /// The collection a tape is in, if any.
+    func collection(of tape: ShelfTape) -> ShelfCollection? {
+        tape.tape.collectionId.flatMap { id in collections.first { $0.id == id } }
+    }
 
     var selectedTape: ShelfTape? {
         shelf.first { $0.id == selectedTapeID }
@@ -264,6 +305,11 @@ final class AppModel {
             message = "A push is running. Recording can start once it finishes."
             return
         }
+        editModel.leave()
+        // Recording from a collection records into it.
+        if let selectedCollectionID, recordModel.recordingTapeID == nil {
+            recordModel.collectionChoice = selectedCollectionID
+        }
         route = .record
     }
 
@@ -320,6 +366,26 @@ final class AppModel {
 
     func leaveReview() {
         leaveReadAlong()
+    }
+
+    // MARK: Edit mode
+
+    func openEdit(_ tape: ShelfTape) {
+        routeBeforeReadAlong = route == .search ? .search : .shelf
+        select(tape)
+        player.pause()
+        route = .edit
+    }
+
+    func leaveEdit() {
+        editModel.leave()
+        leaveReadAlong()
+    }
+
+    /// Keys for edit mode. Returns whether the key was used.
+    func handleEditKey(code: UInt16, characters: String, shift: Bool) -> Bool {
+        guard route == .edit else { return false }
+        return editModel.handleKey(code: code, characters: characters, shift: shift)
     }
 
     /// Keys for the review screen. Returns whether the key was used.
@@ -465,13 +531,73 @@ final class AppModel {
                 if let selectedTapeID, !tapes.contains(where: { $0.id == selectedTapeID }) {
                     self.selectedTapeID = nil
                     player.stop()
-                    if route == .readAlong || route == .review || route == .post { route = .shelf }
+                    if route == .readAlong || route == .review || route == .post || route == .edit { route = .shelf }
                 }
             }
         } catch {
             message = "Your shelf couldn’t be loaded. \(error.localizedDescription)"
         }
         isObservingShelf = false
+    }
+
+    // MARK: Collections
+
+    /// Keeps the collections matching the database for as long as the app runs.
+    func observeCollections() async {
+        guard let library else { return }
+        do {
+            for try await update in library.collectionUpdates() {
+                collections = update
+                if let selectedCollectionID, !update.contains(where: { $0.id == selectedCollectionID }) {
+                    self.selectedCollectionID = nil
+                }
+            }
+        } catch {
+            message = "Your collections couldn’t be loaded. \(error.localizedDescription)"
+        }
+    }
+
+    /// Makes a collection, optionally with tapes in it, and opens it.
+    func createCollection(named name: String, with tapes: [ShelfTape] = []) async {
+        guard let library else { return }
+        do {
+            let id = try await Task.detached { try await library.createCollection(name: name) }.value
+            for tape in tapes {
+                let tapeID = tape.id
+                try await Task.detached { try await library.setCollection(tapeID: tapeID, collectionID: id) }.value
+            }
+            sidebarSelection = .collection(id)
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    func setCollection(_ tape: ShelfTape, to collectionID: Int64?) async {
+        let tapeID = tape.id
+        await performDetached { try await $0.setCollection(tapeID: tapeID, collectionID: collectionID) }
+    }
+
+    func moveInCollection(_ tapeID: Int64, to place: Int) async {
+        await performDetached { try await $0.moveInCollection(tapeID: tapeID, to: place) }
+    }
+
+    func saveCollection(_ id: Int64, fields: CollectionFields) async {
+        await performDetached { try await $0.saveCollection(id: id, fields: fields) }
+    }
+
+    func deleteCollection(_ id: Int64) async {
+        await performDetached { try await $0.deleteCollection(id: id) }
+    }
+
+    /// Runs a change away from the calling task, so it's saved even if the view
+    /// that asked for it goes away.
+    func performDetached(_ action: @escaping @Sendable (Library) async throws -> Void) async {
+        guard let library else { return }
+        do {
+            try await Task.detached { try await action(library) }.value
+        } catch {
+            message = error.localizedDescription
+        }
     }
 
     func select(_ tape: ShelfTape) {
@@ -527,13 +653,47 @@ final class AppModel {
         }
     }
 
+    /// Removes one recording from a tape, moving its audio to the Trash.
+    func removeSide(_ item: ShelfTape.Item, of tape: ShelfTape) async {
+        guard let library else { return }
+        if recordModel.isRecording, recordModel.recordingTapeID == tape.id {
+            message = "This tape is still recording."
+            return
+        }
+        if selectedTapeID == tape.id {
+            player.stop()
+            selectedItemIndex = 0
+        }
+        let sourceID = item.id
+        do {
+            try await Task.detached {
+                try await library.removeSide(sourceID: sourceID)
+            }.value
+        } catch {
+            message = "\(item.name) couldn’t be deleted. \(error.localizedDescription)"
+        }
+    }
+
+    func renameSide(_ item: ShelfTape.Item, to name: String) async {
+        guard let library else { return }
+        let sourceID = item.id
+        do {
+            try await Task.detached {
+                try await library.renameSide(sourceID: sourceID, to: name)
+            }.value
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
     // MARK: Adding audio
 
     /// Adds dropped files and folders, reporting only what needs attention.
     func add(_ urls: [URL]) async {
         guard let database else { return }
         let pipeline = Pipeline(database: database, paths: paths)
-        let importer = DropImporter(database: database, paths: paths) { pipeline.hasModel($0) }
+        var importer = DropImporter(database: database, paths: paths) { pipeline.hasModel($0) }
+        importer.reservedNumbers = siteNumbers
 
         let task = Task.detached(priority: .userInitiated) { await importer.add(urls) }
         let summary = await task.value
@@ -558,6 +718,16 @@ final class AppModel {
         panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Music")
         guard panel.runModal() == .OK, let folder = panel.url else { return }
         Task { await importBackup(from: folder) }
+    }
+
+    /// Queues transcripts and waveforms for audio that arrived without them.
+    func queueNewAudio() async {
+        guard let database else { return }
+        let pipeline = Pipeline(database: database, paths: paths)
+        try? await database.writer.write { db in
+            try JobStore.enqueueMissingTranscripts(db) { pipeline.hasModel($0) }
+            try JobStore.enqueueMissingPeaks(db)
+        }
     }
 
     func importBackup(from folder: URL) async {

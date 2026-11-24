@@ -117,6 +117,23 @@ private struct RecordSetup: View {
                         .textFieldStyle(.roundedBorder)
                 }
 
+                section("Collection (optional)") {
+                    Picker("Collection", selection: $record.collectionChoice) {
+                        Text("None").tag(Int64?.none)
+                        if !model.collections.isEmpty { Divider() }
+                        ForEach(model.collections) { collection in
+                            Text(collection.collection.name).tag(Int64?.some(collection.id))
+                        }
+                        Divider()
+                        Text("New Collection…").tag(Int64?.some(RecordModel.newCollection))
+                    }
+                    .labelsHidden()
+                    if record.collectionChoice == RecordModel.newCollection {
+                        TextField("Name of the collection", text: $record.newCollectionName)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+
                 section("Input") {
                     Picker("Device", selection: Binding(
                         get: { record.selectedDevice?.uid },
@@ -174,11 +191,13 @@ private struct RecordSetup: View {
 /// The meter, what it means, and what to do next.
 private struct RecordStage: View {
     @Environment(AppModel.self) private var model
+    @State private var confirmingReRecord = false
 
     private var record: RecordModel { model.recordModel }
 
     var body: some View {
         VStack(spacing: 16) {
+            numberLabel
             VUMeter(capture: record.capture)
                 .frame(maxWidth: record.isLarge ? .infinity : 520)
                 .frame(maxHeight: record.isLarge ? .infinity : 360)
@@ -199,6 +218,29 @@ private struct RecordStage: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The RA number to write on the box, readable from the tape machine.
+    @ViewBuilder private var numberLabel: some View {
+        if let number = record.catalogNumber {
+            let isAssigned = record.recordingTapeID != nil
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(number)
+                    .font(.system(size: record.isLarge ? 44 : 28, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Theme.ink)
+                    .textSelection(.enabled)
+                Text(isAssigned
+                     ? "Side \(record.currentSide). Label the box \(number)."
+                     : "This tape will be \(number). It’s given when you press Record.")
+                    .font(.system(size: record.isLarge ? 16 : 13))
+                    .foregroundStyle(Theme.inkMuted)
+                    .fixedSize()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .background(Theme.card, in: .rect(cornerRadius: 8))
+            .accessibilityElement(children: .combine)
+        }
     }
 
     private var status: some View {
@@ -324,9 +366,25 @@ private struct RecordStage: View {
                 .tint(Theme.ink)
                 .controlSize(.large)
             case .finished:
-                Button("Record Side \(nextSide)") { Task { await record.recordNextSide() } }
+                Button("Record Side \(record.nextSide)") { Task { await record.recordNextSide() } }
                     .controlSize(.large)
                     .disabled(!record.isListening)
+                if record.lastRecordedSourceID != nil {
+                    Button("Re-record Side \(record.currentSide)…") { confirmingReRecord = true }
+                        .controlSize(.large)
+                        .disabled(!record.isListening)
+                        .confirmationDialog(
+                            "Record side \(record.currentSide) again?",
+                            isPresented: $confirmingReRecord,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Re-record Side \(record.currentSide)", role: .destructive) {
+                                Task { await record.reRecordLastSide() }
+                            }
+                        } message: {
+                            Text("The take you just made moves to the Trash, and recording starts again right away. Rewind the tape first.")
+                        }
+                }
                 Button("New Tape") { record.startAnotherTape() }
                     .controlSize(.large)
                 Button("Review and Add Markers") { record.reviewRecording() }
@@ -348,9 +406,6 @@ private struct RecordStage: View {
         .disabled(!record.isListening)
     }
 
-    private var nextSide: String {
-        String(UnicodeScalar(UInt8(min(90, (record.currentSide.utf8.first ?? 65) + 1))))
-    }
 }
 
 /// An analog-style needle with a peak light that stays lit long enough to notice.

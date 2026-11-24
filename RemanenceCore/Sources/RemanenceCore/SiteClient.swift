@@ -15,6 +15,18 @@ public protocol SiteAPI: Sendable {
     /// Changes only what's sent. Throws `SiteError.changedOnSite` if the post changed
     /// on the site since `expectedUpdatedAt`.
     func updateEntry(_ update: SiteUpdate) async throws -> SitePostState
+    /// Every post on the site, briefly.
+    func listEntries() async throws -> [SiteEntrySummary]
+    /// Removes a post. Throws `SiteError.changedOnSite` if it changed since `expectedUpdatedAt`.
+    func deleteEntry(tapeUUID: String, catalogNumber: String?, expectedUpdatedAt: String) async throws
+    func fetchCollection(uuid: String) async throws -> SiteCollectionState
+    /// Creates or updates a collection, whole. Throws `SiteError.changedOnSite` if it
+    /// changed since `expectedUpdatedAt`, or exists when that's nil.
+    func saveCollection(_ push: SiteCollectionPush) async throws -> SiteCollectionState
+    func deleteCollection(uuid: String, expectedUpdatedAt: String) async throws
+    /// Moves posts to new numbers, all at once. Throws `SiteError.changedOnSite` if any
+    /// changed since it was last read.
+    func renumber(_ changes: [SiteRenumber]) async throws -> [SitePostState]
 }
 
 public struct SiteUpload: Equatable, Sendable {
@@ -55,6 +67,8 @@ public struct SiteEntry: Encodable, Equatable, Sendable {
     public var images: [Image] = []
     public let transcriptSha256: String?
     public let metadata: [String: String]
+    /// The number the tape was given here. The site keeps it, or refuses if it's taken.
+    public var catalogNumber: String? = nil
 }
 
 public enum SiteError: LocalizedError, Equatable {
@@ -177,6 +191,79 @@ public struct SiteClient: SiteAPI {
         }
     }
 
+    public func listEntries() async throws -> [SiteEntrySummary] {
+        struct Reply: Decodable { let entries: [SiteEntrySummary] }
+        var request = URLRequest(url: baseURL.appending(path: "api/sync/entries"))
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await session.data(for: request)
+        try Self.check(response, data: data)
+        do {
+            return try JSONDecoder().decode(Reply.self, from: data).entries
+        } catch {
+            throw SiteError.unexpectedResponse
+        }
+    }
+
+    public func deleteEntry(tapeUUID: String, catalogNumber: String?, expectedUpdatedAt: String) async throws {
+        struct Body: Encodable {
+            let tapeUuid: String
+            let catalogNumber: String?
+            let expectedUpdatedAt: String
+        }
+        struct Reply: Decodable { let deleted: String }
+        do {
+            let _: Reply = try await post("api/sync/delete", Body(tapeUuid: tapeUUID, catalogNumber: catalogNumber, expectedUpdatedAt: expectedUpdatedAt))
+        } catch SiteError.server(409, let message) where message.contains("changed on the site") {
+            throw SiteError.changedOnSite
+        }
+    }
+
+    public func fetchCollection(uuid: String) async throws -> SiteCollectionState {
+        var components = URLComponents(url: baseURL.appending(path: "api/sync/collection"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "uuid", value: uuid)]
+        var request = URLRequest(url: components.url!)
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await session.data(for: request)
+        try Self.check(response, data: data)
+        do {
+            return try JSONDecoder().decode(SiteCollectionState.self, from: data)
+        } catch {
+            throw SiteError.unexpectedResponse
+        }
+    }
+
+    public func saveCollection(_ push: SiteCollectionPush) async throws -> SiteCollectionState {
+        do {
+            return try await post("api/sync/collection", push)
+        } catch SiteError.server(409, let message) where message.contains("changed on the site") {
+            throw SiteError.changedOnSite
+        }
+    }
+
+    public func renumber(_ changes: [SiteRenumber]) async throws -> [SitePostState] {
+        struct Body: Encodable { let changes: [SiteRenumber] }
+        struct Reply: Decodable { let entries: [SitePostState] }
+        do {
+            let reply: Reply = try await post("api/sync/renumber", Body(changes: changes))
+            return reply.entries
+        } catch SiteError.server(409, let message) where message.contains("changed on the site") {
+            throw SiteError.changedOnSite
+        }
+    }
+
+    public func deleteCollection(uuid: String, expectedUpdatedAt: String) async throws {
+        struct Body: Encodable {
+            let uuid: String
+            let expectedUpdatedAt: String
+        }
+        struct Reply: Decodable { let deleted: String }
+        do {
+            let _: Reply = try await post("api/sync/collection/delete", Body(uuid: uuid, expectedUpdatedAt: expectedUpdatedAt))
+        } catch SiteError.server(409, let message) where message.contains("changed on the site") {
+            throw SiteError.changedOnSite
+        }
+    }
+
     private func post<Body: Encodable, Reply: Decodable>(_ path: String, _ body: Body) async throws -> Reply {
         var request = URLRequest(url: baseURL.appending(path: path))
         request.httpMethod = "POST"
@@ -200,9 +287,18 @@ public struct SiteClient: SiteAPI {
         case 501: throw SiteError.notConfigured
         default:
             struct Failure: Decodable { let error: String }
-            let message = (try? JSONDecoder().decode(Failure.self, from: data))?.error
-                ?? String(decoding: data.prefix(200), as: UTF8.self)
-            throw SiteError.server(status: http.statusCode, message: message)
+            if let failure = try? JSONDecoder().decode(Failure.self, from: data) {
+                throw SiteError.server(status: http.statusCode, message: failure.error)
+            }
+            // A web page instead of an answer: the site doesn't have this route.
+            let text = String(decoding: data.prefix(200), as: UTF8.self)
+            let isPage = text.range(of: "<!doctype html", options: .caseInsensitive) != nil || text.hasPrefix("<html")
+            throw SiteError.server(
+                status: http.statusCode,
+                message: isPage
+                    ? (http.statusCode == 404 ? "The site doesn’t know this request yet. It may need to be updated." : "The site sent back a web page instead of an answer.")
+                    : text
+            )
         }
     }
 }

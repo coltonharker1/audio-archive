@@ -25,6 +25,9 @@ public struct Tape: Codable, Identifiable, Hashable, Sendable, FetchableRecord, 
     public var approvedAt: Date?
     public var pushedAt: Date?
     public var createdAt: Date
+    /// The collection it came in, and its place there.
+    public var collectionId: Int64?
+    public var collectionPosition: Double?
 
     public mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID
@@ -71,6 +74,18 @@ public struct Track: Codable, Identifiable, Hashable, Sendable, FetchableRecord,
     public var summary: String?
     /// Written by hand for the site. `summary` is Claude's, kept as reference.
     public var description: String?
+    /// See `TrackAdjustments`.
+    public var gainDb: Double = 0
+    public var speed: Double = 1
+    public var reversed: Bool = false
+    /// The track this one plays straight after, as one track on the site.
+    public var appendedToTrackId: Int64?
+    /// Its place on the site, once tracks have been reordered.
+    public var sortIndex: Double?
+    /// Master seconds left out at the start and end of the track's stretch, in
+    /// recording order, so they stay with the same audio when it's reversed.
+    public var cutStart: Double = 0
+    public var cutEnd: Double = 0
 
     public mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID

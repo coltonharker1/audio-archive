@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Cable Man — Remanence Archive</title>
+  <style>
+    :root {
+      --paper: #faf5ee;
+      --ink: #211d19;
+      --muted: #625a51;
+      --rule: rgb(33 29 25 / 19%);
+      --gutter: clamp(24px, 4.3vw, 66px);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 18px/1.5 "EB Garamond", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+      font-variant-numeric: oldstyle-nums;
+      -webkit-font-smoothing: antialiased;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 5;
+      pointer-events: none;
+      opacity: .032;
+      mix-blend-mode: multiply;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Cpath fill='%23877' filter='url(%23n)' d='M0 0h220v220H0z'/%3E%3C/svg%3E");
+    }
+    a { color: inherit; text-decoration: none; }
+    a:focus-visible { outline: 1px solid var(--ink); outline-offset: 3px; }
+    a:hover, .jump { text-decoration: underline; text-underline-offset: 4px; }
+    ::selection { color: var(--paper); background: var(--ink); }
+    header {
+      height: 76px;
+      padding: 0 var(--gutter);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .name { font-size: 21px; letter-spacing: .005em; padding: 12px 0; }
+    header nav { display: flex; gap: 8px; margin-right: -12px; }
+    header nav a { padding: 12px; font-size: 16.5px; }
+    main { padding: 30px calc(var(--gutter) + 30px) 110px; }
+    .back { display: inline-block; padding: 8px 0; }
+    .opening {
+      display: grid;
+      grid-template-columns: minmax(0,594fr) minmax(0,630fr);
+      grid-template-areas: "object title" "object essay";
+      gap: 0 clamp(40px,7.8vw,120px);
+      align-items: start;
+      margin-top: 20px;
+    }
+    .heading { grid-area: title; }
+    .kind, .facts, .inventory { font-variant-numeric: lining-nums; }
+    .kind { margin: 0; font-size: 15px; letter-spacing: .02em; }
+    h1 { margin: 12px 0 18px; font-size: 32px; line-height: 1.22; font-weight: 400; }
+    .facts { margin: 0; font-size: 17px; line-height: 1.45; }
+    .jump { display: inline-block; padding: 4px 0; }
+    .essay {
+      grid-area: essay;
+      max-width: 630px;
+      margin-top: 24px;
+      font-size: 21.5px;
+      line-height: 30px;
+    }
+    .essay p { margin: 0 0 18px; text-wrap: pretty; }
+    figure { grid-area: object; margin: 0; align-self: center; }
+    /* A study of the lid occupies the place of the original box photograph. */
+    .lid {
+      position: relative;
+      isolation: isolate;
+      width: 89%;
+      aspect-ratio: 1.48;
+      margin: 24px auto 26px;
+      transform: rotate(-3deg);
+      border: 1px solid #968365;
+      border-radius: 4px 2px 7px 2px;
+      color: #40382d;
+      background:
+        linear-gradient(92deg, transparent 47%, #98836140 48%, transparent 49%),
+        repeating-linear-gradient(3deg, #8a755514 0 1px, transparent 1px 4px),
+        linear-gradient(117deg, #c6b28d, #d8c6a4 39%, #bdab89 92%);
+      box-shadow: inset 3px 4px 0 #e1cfac, inset -4px -7px 0 #a49374;
+    }
+    .lid::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 10%;
+      width: 7%;
+      background: linear-gradient(90deg, #ae935f55, #d6bd8255 74%, #a0855740);
+      border-inline: 1px solid #997e5370;
+      z-index: -1;
+    }
+    .tag {
+      position: absolute;
+      left: 24%;
+      top: 25%;
+      width: 58%;
+      padding: 5% 5% 4%;
+      transform: rotate(1.8deg);
+      background: #eae2cd;
+      border: 1px solid #b3a48a;
+      font: italic clamp(17px,2.05vw,31px)/1.13 "Iowan Old Style", Georgia, serif;
+    }
+    .tag small {
+      display: block;
+      margin-top: 10px;
+      padding-top: 5px;
+      border-top: 1px solid #a79c85;
+      font-size: .65em;
+    }
+    .pencil {
+      position: absolute;
+      right: 10%;
+      bottom: 13%;
+      transform: rotate(-5deg);
+      font-style: italic;
+      color: #615443;
+      font-size: clamp(13px,1.25vw,19px);
+    }
+    figcaption { margin-left: 5%; font-size: 14px; color: var(--muted); }
+    .inventory { max-width: 845px; margin: 66px auto 0; scroll-margin-top: 24px; }
+    h2 {
+      margin: 0 0 10px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--rule);
+      font-weight: 400;
+      font-size: 23px;
+    }
+    ul { margin: 0; padding: 0; list-style: none; }
+    .row {
+      display: grid;
+      grid-template-columns: 78px minmax(0,1fr) minmax(115px,.38fr) auto;
+      gap: 12px;
+      align-items: baseline;
+      padding: 15px 0;
+      font-size: 21px;
+      line-height: 31px;
+    }
+    .row:hover { text-decoration: none; }
+    .row:hover .title { text-decoration: underline; text-underline-offset: 4px; }
+    .no { font-size: 16px; }
+    .length { text-align: right; font-variant-numeric: lining-nums tabular-nums; }
+    @media (max-width: 900px) {
+      main { padding: 12px var(--gutter) 80px; }
+      .opening {
+        max-width: 630px;
+        margin: 16px auto 0;
+        grid-template-columns: minmax(0,1fr);
+        grid-template-areas: "title" "object" "essay";
+      }
+      h1 { font-size: 28px; }
+      figure { width: min(100%,440px); margin: 16px 0 0; }
+      .lid { width: 85%; }
+      .essay { font-size: 20px; line-height: 29px; }
+      .inventory { margin-top: 40px; }
+    }
+    @media (max-width: 720px) {
+      header { height: 68px; }
+      .row {
+        grid-template-columns: 46px minmax(0,1fr) auto;
+        grid-template-areas: "no title title" ". date length";
+        gap: 0 8px;
+        padding: 13px 0;
+        font-size: 19px;
+        line-height: 26px;
+        border-bottom: 1px solid var(--rule);
+      }
+      .no { grid-area: no; }
+      .title { grid-area: title; }
+      .date { grid-area: date; }
+      .length { grid-area: length; }
+      .date, .length { font-size: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <a class="name" href="/">Remanence Archive</a>
+    <nav aria-label="Site"><a href="/recordings">Index</a><a href="/about">About</a></nav>
+  </header>
+
+  <main>
+    <a class="back" href="/recordings?view=collections#the-cable-man">Back to collections</a>
+
+    <div class="opening">
+      <div class="heading">
+        <p class="kind">Collection</p>
+        <h1>The Cable Man</h1>
+        <p class="facts">
+          Found at a garage sale in Joliet, Illinois, October 2023<br>
+          <a class="jump" href="#reels">6 reels</a>
+        </p>
+      </div>
+
+      <figure>
+        <div class="lid" role="img"
+             aria-label="Study of a cardboard lid. A paper label reads “Cable — local. Breaks &amp; effects.” In pencil below it, “keep the short ones.”">
+          <span class="tag" aria-hidden="true">Cable — local<small>Breaks &amp; effects</small></span>
+          <span class="pencil" aria-hidden="true">keep the short ones</span>
+        </div>
+        <figcaption>The box lid, with a second instruction in pencil. Illustration.</figcaption>
+      </figure>
+
+      <div class="essay">
+        <p>The box was under a card table with a crimping tool and a coffee tin
+          full of cable ends. On the lid someone had written “keep the short
+          ones.” The shortest thing in the box is a station break that lasts
+          just long enough for three voices to sing the name of a town.</p>
+        <p>There are three endings to that tune. On the first, a bass player
+          lets the last note ring. On the second, somebody puts a hand on the
+          strings. The third ends in the middle of the word “Joliet.” All
+          three were wound onto one reel, with a little white leader between
+          them.</p>
+        <p>I think these belonged to someone who worked on the local cable
+          system. The line checks give me that impression. What I keep coming
+          back to is the rain reel. After the gutter stops rattling, whoever
+          held the microphone stayed out there for another minute.</p>
+      </div>
+    </div>
+
+    <section class="inventory" id="reels" aria-labelledby="inventory-title">
+      <h2 id="inventory-title">Reels in this collection</h2>
+      <ul>
+        <li id="RA-014"><a class="row" href="/archive/RA-014?from=the-cable-man">
+          <span class="no">014</span><span class="title">Line check from the headend</span>
+          <span class="date"><i>c.</i> 1978</span><span class="length">4:16</span>
+        </a></li>
+        <li id="RA-019"><a class="row" href="/archive/RA-019?from=the-cable-man">
+          <span class="no">019</span><span class="title">Station break, three endings</span>
+          <span class="date"><i>c.</i> 1978–80</span><span class="length">1:42</span>
+        </a></li>
+        <li id="RA-023"><a class="row" href="/archive/RA-023?from=the-cable-man">
+          <span class="no">023</span><span class="title">Rain in the downspout</span>
+          <span class="date">Undated</span><span class="length">6:08</span>
+        </a></li>
+        <li id="RA-028"><a class="row" href="/archive/RA-028?from=the-cable-man">
+          <span class="no">028</span><span class="title">Calls after the game</span>
+          <span class="date">1981</span><span class="length">18:37</span>
+        </a></li>
+        <li id="RA-031"><a class="row" href="/archive/RA-031?from=the-cable-man">
+          <span class="no">031</span><span class="title">Doors, latches, one deadbolt</span>
+          <span class="date">Undated</span><span class="length">3:54</span>
+        </a></li>
+        <li id="RA-037"><a class="row" href="/archive/RA-037?from=the-cable-man">
+          <span class="no">037</span><span class="title">Music to run under the weather</span>
+          <span class="date"><i>c.</i> 1982</span><span class="length">9:21</span>
+        </a></li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>
