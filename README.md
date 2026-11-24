@@ -16,6 +16,12 @@ It's built for one person's archive, so it skips the sandbox and the App Store.
   search every word on every tape.
 - **Review.** Split a tape into tracks with markers, and trim it. The master is never
   cut.
+- **Edit.** Set each track's level, speed and direction, trim its ends, zoom in to
+  split precisely, join tracks and reorder them. Scrubbing sounds like rocking a reel.
+- **Collections.** Group the reels from one box, with a write-up and photos, and
+  publish them together.
+- **Catalog numbers.** Each tape gets its RA number as it's recorded, so the box can be
+  labelled straight away. The Catalog renumbers reels.
 - **Publish.** Write each post in **Site Post**: title, description, photos, dates,
   and track text, with Claude's summaries alongside for reference. Push it to the site
   as an unpublished draft, then update it or refresh it from the site later.
@@ -57,4 +63,7 @@ Run the tests with `swift test --package-path RemanenceCore`, or through Xcode.
 | `project.yml` | Generates the Xcode project, which isn't checked in |
 | `scripts/dev/` | Helpers for testing the running app |
 | `docs/native-app-plan.md` | Decisions, status and what's next |
+| `docs/recent-work.md` | What was built in November 2026, and how it fits together |
+| `docs/collections/` | The collections design, with Codex's proposals and mockups |
+| `docs/ideas.md` | Ideas not yet built |
 | `docs/DESIGN.md` | History of the earlier Go version, which this replaced |
