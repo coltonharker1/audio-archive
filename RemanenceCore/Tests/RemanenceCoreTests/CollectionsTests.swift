@@ -70,6 +70,26 @@ import UniformTypeIdentifiers
         await #expect(throws: CollectionError.emptyName) { try await library.createCollection(name: "  ") }
     }
 
+    @Test func aBlankNameIsKeptAndTheFieldsShowTheKeptOne() async throws {
+        let box = try await library.createCollection(name: "The Cable Man")
+        var fields = CollectionFields(try await collections()[0].collection)
+        fields.name = "  \n"
+        fields.description = "A box from a garage sale."
+        try await library.saveCollection(id: box, fields: fields)
+        let stored = try await collections()[0].collection
+        #expect(stored.name == "The Cable Man")
+        #expect(stored.description == "A box from a garage sale.")
+
+        // What the edit sheet shows again matches what the library kept.
+        let shown = fields.keepingName(stored.name)
+        #expect(shown == CollectionFields(stored))
+        #expect(shown.description == "A box from a garage sale.")
+
+        // A name that's typed is left alone.
+        fields.name = "Accordion Lessons"
+        #expect(fields.keepingName(stored.name) == fields)
+    }
+
     @Test func reelsJoinAtTheEndAndTakeTheOrderTheyAreGiven() async throws {
         let box = try await library.createCollection(name: "The Cable Man")
         let a = try await addTape("Line check")

@@ -91,6 +91,15 @@ public struct CollectionFields: Equatable, Sendable {
         whereFound = collection.whereFound ?? ""
         dateFound = collection.dateFound ?? ""
     }
+
+    /// The same fields with a blank name put back to `stored`, as saving keeps the
+    /// stored name when the field for it is empty.
+    public func keepingName(_ stored: String) -> CollectionFields {
+        guard name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return self }
+        var kept = self
+        kept.name = stored
+        return kept
+    }
 }
 
 public enum CollectionError: LocalizedError, Equatable {

@@ -27,6 +27,10 @@ struct CollectionView: View {
     @State private var captions: [Int64: String] = [:]
     @State private var savedCaptions: [Int64: String] = [:]
     @State private var saveTask: Task<Void, Never>?
+    /// Library writes started without waiting, which a push waits for first.
+    @State private var pendingWrite: Task<Void, Never>?
+    /// Whether a confirmed delete is saving before it starts, so nothing else races it.
+    @State private var isDeleting = false
     @State private var isDropTargeted = false
     @State private var sheet: CollectionSheet?
     /// The width of the detail area, which sets sizes and whether the columns stack.
@@ -96,7 +100,7 @@ struct CollectionView: View {
             }
         }
         .onDisappear { saveNow() }
-        .sheet(item: $sheet, onDismiss: { saveNow() }) { sheet in
+        .sheet(item: $sheet, onDismiss: { keepName(); saveNow() }) { sheet in
             switch sheet {
             case .edit:
                 EditCollectionSheet(
@@ -112,7 +116,7 @@ struct CollectionView: View {
                     onCaptionChange: scheduleSave
                 )
             case .site:
-                CollectionSiteSheet(collectionID: collection.id, send: send)
+                CollectionSiteSheet(collectionID: collection.id, isDeleting: isDeleting, send: send)
             case .addReels:
                 AddReelsSheet(collectionID: collection.id)
             }
@@ -275,10 +279,13 @@ struct CollectionView: View {
         let isOnSite = model.collections.first { $0.id == id }?.collection.isOnSite ?? collection.collection.isOnSite
         // The site sheet shows how a removal from the site goes.
         sheet = isOnSite ? .site : nil
+        isDeleting = isOnSite
         Task {
             await saveAndWait()
             if isOnSite {
+                // Marks the push model busy before returning, so the sheet stays disabled.
                 model.pushModel.removeCollectionFromSite(id, andHere: true)
+                isDeleting = false
             } else {
                 await model.deleteCollection(id)
             }
@@ -306,9 +313,18 @@ struct CollectionView: View {
         }
     }
 
-    /// Saves anything typed and not yet saved, and returns once it's in the library.
+    /// A blank name isn't saved, so the fields go back to the name the library kept.
+    private func keepName() {
+        let stored = collection.collection.name
+        fields = fields?.keepingName(stored)
+        saved = saved?.keepingName(stored)
+    }
+
+    /// Saves anything typed and not yet saved, and returns once it's in the library,
+    /// along with any write already started.
     private func saveAndWait() async {
         saveTask?.cancel()
+        await pendingWrite?.value
         guard let library = model.library, let id = loadedID else { return }
         if let fields, fields != saved {
             saved = fields
@@ -323,13 +339,26 @@ struct CollectionView: View {
     private func saveNow() {
         saveTask?.cancel()
         guard let library = model.library, let id = loadedID else { return }
+        var changed: CollectionFields?
         if let fields, fields != saved {
             saved = fields
-            Task { await model.saveCollection(id, fields: fields) }
+            changed = fields
         }
+        var captionChanges: [(Int64, String)] = []
         for (imageID, caption) in captions where savedCaptions[imageID] != caption {
             savedCaptions[imageID] = caption
-            Task.detached { try? await library.setCollectionCaption(imageID: imageID, caption: caption) }
+            captionChanges.append((imageID, caption))
+        }
+        guard changed != nil || !captionChanges.isEmpty else { return }
+        // After any write before it, so they land in order, and kept so a push can wait.
+        let previous = pendingWrite
+        let model = model
+        pendingWrite = Task {
+            await previous?.value
+            if let changed { await model.saveCollection(id, fields: changed) }
+            for (imageID, caption) in captionChanges {
+                try? await Task.detached { try await library.setCollectionCaption(imageID: imageID, caption: caption) }.value
+            }
         }
     }
 }
@@ -785,8 +814,13 @@ private struct CollectionSiteSheet: View {
     @State private var confirmingRemove = false
 
     let collectionID: Int64
+    /// A confirmed delete is saving before it removes the collection from the site.
+    let isDeleting: Bool
     /// Saves what's typed and sends the collection. A value changes whether it's public.
     let send: (Bool?) -> Void
+
+    /// Whether anything is going to the site, or about to.
+    private var isBusy: Bool { model.pushModel.isPushing || isDeleting }
 
     var body: some View {
         let collection = model.collections.first { $0.id == collectionID }
@@ -807,7 +841,7 @@ private struct CollectionSiteSheet: View {
                 HStack {
                     Button("Remove from Site…", role: .destructive) { confirmingRemove = true }
                         .buttonStyle(.paperStandard)
-                        .disabled(model.pushModel.isPushing)
+                        .disabled(isBusy)
                     Spacer(minLength: 0)
                 }
                 .padding(20)
@@ -818,6 +852,7 @@ private struct CollectionSiteSheet: View {
         .background(Theme.paper)
         .confirmationDialog("Remove “\(name)” from the site?", isPresented: $confirmingRemove, titleVisibility: .visible) {
             Button("Remove from Site", role: .destructive) {
+                guard !isDeleting else { return }
                 model.pushModel.removeCollectionFromSite(collectionID)
             }
         } message: {
@@ -828,7 +863,7 @@ private struct CollectionSiteSheet: View {
     private func panel(_ collection: ShelfCollection) -> some View {
         let push = model.pushModel
         let record = collection.collection
-        let isBusy = push.syncingCollectionID == collection.id
+        let isSyncing = push.syncingCollectionID == collection.id
         return VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
                 CapLabel("Site status")
@@ -837,7 +872,7 @@ private struct CollectionSiteSheet: View {
                     .foregroundStyle(Theme.ink)
             }
 
-            if isBusy {
+            if isSyncing {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     if let progress = push.progress {
@@ -851,20 +886,20 @@ private struct CollectionSiteSheet: View {
                     if !record.isOnSite {
                         Button("Push to Site") { send(nil) }
                             .buttonStyle(.paperPrimary)
-                            .disabled(push.isPushing)
+                            .disabled(isBusy)
                             .help("Sends it as an unpublished draft, with its write-up, photos and reels")
                     } else {
                         Button("Send Changes") { send(nil) }
                             .buttonStyle(.paperPrimary)
-                            .disabled(push.isPushing || !collection.hasUnsentChanges)
+                            .disabled(isBusy || !collection.hasUnsentChanges)
                         Button(record.sitePublished ? "Unpublish" : "Publish") { send(!record.sitePublished) }
                             .buttonStyle(.paperStandard)
-                            .disabled(push.isPushing)
+                            .disabled(isBusy)
                     }
                 }
             }
 
-            if !isBusy {
+            if !isSyncing {
                 if let failure = push.collectionFailure, failure.id == collection.id {
                     Text(failure.text)
                         .font(.system(size: 13))
