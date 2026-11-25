@@ -1,0 +1,7 @@
+1. [minor] `Remanence/CollectionView.swift:327` — `saveNow` marks fields and captions saved, then starts the library write without waiting. `saveAndWait` (`CollectionView.swift:313`) skips anything already marked saved, so it does not wait for that write. Closing the edit or photos sheet calls `saveNow` (`CollectionView.swift:99`). Push, Publish, and Unpublish then call `saveAndWait` (`CollectionView.swift:266`). A send that starts before the write finishes sends the previous text. The same overlap can let a local delete finish first and the late save report that the collection is no longer in the library.
+
+2. [minor] `Remanence/CollectionView.swift:49` — A blank name is shown as the stored name, and `saveCollection` keeps the old name when the field is empty. The edit sheet still holds that blank `fields.name` (`CollectionView.swift:643`) because `load()` runs only when the collection id changes (`CollectionView.swift:290`). Reopening Edit collection shows an empty name for a collection that still has one.
+
+3. [minor] `Remanence/CollectionView.swift:277` — Deleting a collection that is on the site switches to the site sheet before `removeCollectionFromSite(_:andHere: true)`. While `saveAndWait` is still running, Remove from Site… (`CollectionView.swift:808`) is enabled and calls `removeCollectionFromSite` without `andHere`. If that click lands first, the confirmed delete-here-and-from-the-site is refused as another send, and the collection stays in the library.
+
+VERDICT: PASS

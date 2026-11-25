@@ -48,3 +48,63 @@ public enum ShelfStatus: Equatable, Sendable {
         }
     }
 }
+
+/// Where a tape or a collection stands with the site, whatever else is happening to it.
+public enum SitePresence: Equatable, Sendable {
+    case localOnly
+    case draftOnSite
+    case published
+
+    /// A tape being worked on, or one whose work failed, keeps its place on the site.
+    /// One the site has in a form that can't be read counts as a draft.
+    public init(_ tape: ShelfTape) {
+        var settled = tape
+        settled.status = .idle
+        switch ShelfStatus(settled) {
+        case .published: self = .published
+        case .draftOnSite, .onSiteUnread: self = .draftOnSite
+        case .recording, .working, .failed, .waiting, .approved, .readyToReview: self = .localOnly
+        }
+    }
+
+    public init(_ collection: TapeCollection) {
+        if !collection.isOnSite {
+            self = .localOnly
+        } else {
+            self = collection.sitePublished ? .published : .draftOnSite
+        }
+    }
+
+    public var label: String {
+        switch self {
+        case .localOnly: "Local only"
+        case .draftOnSite: "Draft on site"
+        case .published: "Published"
+        }
+    }
+}
+
+/// What the footer counts under a collection.
+public struct CollectionCounts: Equatable, Sendable {
+    public let reels: Int
+    public let publishedReels: Int
+    /// The collection's own page, which is published apart from its reels.
+    public let collection: SitePresence
+
+    public init(_ collection: TapeCollection, reels: [SitePresence]) {
+        self.reels = reels.count
+        publishedReels = reels.count { $0 == .published }
+        self.collection = SitePresence(collection)
+    }
+
+    public var footerNote: String {
+        let all = reels == 1 ? "1 reel" : "\(reels) reels"
+        let published = publishedReels == 1 ? "1 published reel" : "\(publishedReels) published reels"
+        let own = switch collection {
+        case .localOnly: "Collection local only"
+        case .draftOnSite: "Collection draft on site"
+        case .published: "Collection published"
+        }
+        return [all, published, own].joined(separator: " · ")
+    }
+}
