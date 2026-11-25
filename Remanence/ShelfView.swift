@@ -156,6 +156,34 @@ private struct LastOpened: View {
         .foregroundStyle(Theme.muted)
     }
 
+    /// The eyebrow, title, subtitle and Resume. Tight closes up the space around the
+    /// title and above Resume, for a title on two lines.
+    private func textColumn(isTight: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            EyebrowLabel(eyebrow)
+            Text(tape.tape.title)
+                .font(Theme.serif(size.heroTitle))
+                .foregroundStyle(Theme.ink)
+                // Two lines as in the mock, then cut.
+                .lineLimit(2)
+                .help(tape.tape.title)
+                .padding(.vertical, isTight ? 1 : size == .regular ? 7 : 3)
+                .layoutPriority(1)
+                .accessibilityAddTraits(.isHeader)
+            subtitle
+            HStack(spacing: 12) {
+                Button("\(resumable.buttonTitle)  →") { model.resume() }
+                    .buttonStyle(.paperPrimary)
+                    .accessibilityLabel(resumable.buttonTitle)
+                Text("at \(TimeLabel.clock(resumable.position.playhead))")
+                    .font(Theme.mono())
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize()
+            }
+            .padding(.top, isTight ? 6 : size == .regular ? 17 : 12)
+        }
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             TapeObject(tape: tape)
@@ -163,29 +191,13 @@ private struct LastOpened: View {
                 .frame(width: size == .regular ? 300 : 180, height: size.heroHeight)
                 .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 0) {
-                EyebrowLabel(eyebrow)
-                Text(tape.tape.title)
-                    .font(Theme.serif(size.heroTitle))
-                    .foregroundStyle(Theme.ink)
-                    // Two lines as in the mock, then cut. The compact hero is only 150
-                    // tall, so its title sits a little closer to its neighbours.
-                    .lineLimit(2)
-                    .help(tape.tape.title)
-                    .padding(.vertical, size == .regular ? 7 : 3)
-                    .layoutPriority(1)
-                    .accessibilityAddTraits(.isHeader)
-                subtitle
-                HStack(spacing: 12) {
-                    Button("\(resumable.buttonTitle)  →") { model.resume() }
-                        .buttonStyle(.paperPrimary)
-                        .accessibilityLabel(resumable.buttonTitle)
-                    Text("at \(TimeLabel.clock(resumable.position.playhead))")
-                        .font(Theme.mono())
-                        .foregroundStyle(Theme.muted)
-                        .fixedSize()
-                }
-                .padding(.top, size == .regular ? 17 : 12)
+            // The hero's height is fixed, and in the compact hero a two-line title with
+            // the usual spacing needs a point or two more than its 150. Squeezed, the
+            // title would drop to one line, so a title that wraps gets tighter spacing
+            // instead. The last layout is used whatever happens, and truncates.
+            ViewThatFits(in: .vertical) {
+                textColumn(isTight: false)
+                textColumn(isTight: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
