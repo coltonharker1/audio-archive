@@ -204,6 +204,7 @@ private struct Sidebar: View {
                             .foregroundStyle(Theme.muted)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("New collection…")
                 }
                 .padding(12)
             }
@@ -261,6 +262,8 @@ private struct SidebarRow: View {
             .foregroundStyle(Theme.ink)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(showsRecordingDot ? "Recording now" : "")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
@@ -320,6 +323,8 @@ private struct CollectionSidebarRow: View {
         }
         .buttonStyle(.plain)
         .help(collection.collection.name)
+        .accessibilityLabel(collection.collection.name)
+        .accessibilityValue(collection.tapeIDs.count == 1 ? "1 reel" : "\(collection.tapeIDs.count) reels")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .overlay {
             RoundedRectangle(cornerRadius: 6)
@@ -390,6 +395,7 @@ private struct EmptyShelfView: View {
                 .multilineTextAlignment(.center)
             Button("Import Backup…") { model.chooseBackupToImport() }
                 .buttonStyle(.paperPrimary)
+                .accessibilityLabel("Import Backup…")
                 .padding(.top, 8)
                 .disabled(model.importProgress != nil)
         }

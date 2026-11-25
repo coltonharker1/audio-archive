@@ -39,6 +39,7 @@ struct ShelfView: View {
                 PageHeader(eyebrow: "Library", title: "Shelf", subtitle: subtitle, size: size) {
                     Button("Import audio…") { model.chooseAudioToImport() }
                         .buttonStyle(.paperStandard)
+                        .accessibilityLabel("Import audio…")
                     Button {
                         model.openRecording()
                     } label: {
@@ -50,6 +51,7 @@ struct ShelfView: View {
                         }
                     }
                     .buttonStyle(.paperPrimary)
+                    .accessibilityLabel("Record a tape")
                 }
                 .padding(.bottom, isTight ? 10 : 14)
 
@@ -141,6 +143,7 @@ private struct LastOpened: View {
                 }
                 .buttonStyle(.plain)
                 .help("Open \(collection.collection.name)")
+                .accessibilityLabel(collection.collection.name)
                 Text("  ·  ")
                     .fixedSize()
             }
@@ -276,6 +279,8 @@ private struct ShelfTabs: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(filter.label)
+        .accessibilityValue(count == 1 ? "1 reel" : "\(count) reels")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
@@ -374,6 +379,7 @@ private struct ShelfRow: View {
         }
         .buttonStyle(.plain)
         .help(tape.tape.title)
+        .accessibilityLabel(tape.tape.title)
     }
 
     /// Why processing stopped, and a way to start it again.
@@ -405,6 +411,7 @@ private struct ShelfRow: View {
             }
             .buttonStyle(.plain)
             .help("Open \(collection.collection.name)")
+            .accessibilityLabel(collection.collection.name)
         } else {
             Color.clear
                 .frame(height: 1)

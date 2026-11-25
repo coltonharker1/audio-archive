@@ -24,6 +24,7 @@ struct SitePostsView: View {
                 PageHeader(eyebrow: "Library", title: "Site Posts", subtitle: summary, size: size) {
                     Button("Reload") { Task { await push.loadListing() } }
                         .buttonStyle(.paperStandard)
+                        .accessibilityLabel("Reload")
                         .disabled(push.isListing)
                         .help("Read the site’s posts again")
                 }

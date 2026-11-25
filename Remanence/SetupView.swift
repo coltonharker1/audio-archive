@@ -32,6 +32,7 @@ struct SetupView: View {
                     Spacer()
                     Button("Check Again") { Task { await model.refresh() } }
                         .buttonStyle(.paperStandard)
+                        .accessibilityLabel("Check Again")
                 }
             }
             .padding(32)
@@ -118,6 +119,7 @@ private struct RequirementRow: View {
                 } else {
                     Button("Download") { Task { await model.download(requirement) } }
                         .buttonStyle(.paperSmall)
+                        .accessibilityLabel("Download")
                 }
             case .tool(_, let installCommand):
                 Button("Copy Install Command") {
@@ -125,6 +127,7 @@ private struct RequirementRow: View {
                     NSPasteboard.general.setString(installCommand, forType: .string)
                 }
                 .buttonStyle(.paperSmall)
+                .accessibilityLabel("Copy Install Command")
                 .help(installCommand)
             }
         }

@@ -53,6 +53,7 @@ struct RecordView: View {
                         // The toolbar's own style greys a titled button, so it read as
                         // disabled. The mocks' pale button reads as one that works.
                         .buttonStyle(.paperStandard)
+                        .accessibilityLabel(record.isLarge ? "Show Setup" : "Large Meter")
                         .help(record.isLarge ? "Show the tape’s label and settings" : "Fill the window with the meter, to read it from across the room")
                     }
                     .sharedBackgroundVisibility(.hidden)
@@ -80,9 +81,11 @@ struct RecordView: View {
                 .multilineTextAlignment(.center)
             Button("Open Privacy Settings") { record.openPrivacySettings() }
                 .buttonStyle(.paperPrimary)
+                .accessibilityLabel("Open Privacy Settings")
                 .padding(.top, 6)
             Button("Check Again") { Task { await record.open() } }
                 .buttonStyle(.paperStandard)
+                .accessibilityLabel("Check Again")
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -134,6 +137,7 @@ private struct CollectionLink: View {
             }
             .buttonStyle(.plain)
             .help("Open \(collection.name)")
+            .accessibilityLabel(collection.name)
         } else {
             Text(collection.name)
                 .lineLimit(1)
@@ -269,6 +273,7 @@ private struct RecordStage: View {
             Button("Re-record Side \(record.currentSide)", role: .destructive) {
                 Task { await record.reRecordLastSide() }
             }
+            .accessibilityLabel("Re-record Side \(record.currentSide)")
         } message: {
             Text("The take you just made moves to the Trash, and recording starts again right away. Rewind the tape first.")
         }
@@ -291,6 +296,7 @@ private struct RecordStage: View {
             case .checking:
                 Button("Cancel") { record.cancelLevelCheck() }
                     .buttonStyle(.paperStandard)
+                    .accessibilityLabel("Cancel")
                 advice
             case .recording:
                 recordingButtons
@@ -360,8 +366,10 @@ private struct RecordStage: View {
         let answers = HStack(spacing: 9) {
             Button("Yes, Stop Recording") { Task { await record.tapeFinishedConfirmed() } }
                 .buttonStyle(.paperPrimary)
+                .accessibilityLabel("Yes, Stop Recording")
             Button("Keep Recording") { record.keepRecording() }
                 .buttonStyle(.paperStandard)
+                .accessibilityLabel("Keep Recording")
         }
         return ViewThatFits(in: .horizontal) {
             HStack(spacing: 14) {
@@ -389,10 +397,12 @@ private struct RecordStage: View {
                 Label("Record", systemImage: "record.circle")
             }
             .buttonStyle(.paperPrimary)
+            .accessibilityLabel("Record")
             .disabled(!record.isListening)
 
             Button("Check Levels") { record.startLevelCheck() }
                 .buttonStyle(.paperStandard)
+                .accessibilityLabel("Check Levels")
                 .disabled(!record.isListening)
         }
     }
@@ -406,6 +416,7 @@ private struct RecordStage: View {
                 Label("Stop Side \(record.currentSide)", systemImage: "stop.fill")
             }
             .buttonStyle(.paperPrimary)
+            .accessibilityLabel("Stop Side \(record.currentSide)")
 
             Button {
                 record.addMarker()
@@ -413,6 +424,7 @@ private struct RecordStage: View {
                 Label("Add marker", systemImage: "flag.fill")
             }
             .buttonStyle(.paperStandard)
+            .accessibilityLabel("Add marker")
 
             Spacer(minLength: 0)
 
@@ -465,8 +477,10 @@ private struct RecordStage: View {
     }
 
     private var reviewButton: some View {
-        Button(record.savedNothing ? "Review" : "Review Side \(record.currentSide)") { review() }
+        let title = record.savedNothing ? "Review" : "Review Side \(record.currentSide)"
+        return Button(title) { review() }
             .buttonStyle(.paperPrimary)
+            .accessibilityLabel(title)
             // A tape whose only pass saved nothing is gone, so there's nothing to open.
             // Until the side is saved, its id isn't known yet.
             .disabled(record.isFinishing || !model.shelf.contains { $0.id == record.recordingTapeID })
@@ -474,10 +488,12 @@ private struct RecordStage: View {
 
     private var nextSideButton: some View {
         // Until the side is saved, the next letter is still the one just recorded.
-        Button(record.isFinishing ? "Record Next Side" : "Record Side \(record.nextSide)") {
+        let title = record.isFinishing ? "Record Next Side" : "Record Side \(record.nextSide)"
+        return Button(title) {
             Task { await record.recordNextSide() }
         }
         .buttonStyle(.paperStandard)
+        .accessibilityLabel(title)
         // A tape whose only pass saved nothing is gone, so it has no next side.
         .disabled(record.isFinishing || !record.isListening || !model.shelf.contains { $0.id == record.recordingTapeID })
     }
@@ -486,6 +502,7 @@ private struct RecordStage: View {
         if record.lastRecordedSourceID != nil {
             Button("Re-record Side \(record.currentSide)…") { confirmingReRecord = true }
                 .buttonStyle(.paperStandard)
+                .accessibilityLabel("Re-record Side \(record.currentSide)…")
                 .disabled(!record.isListening)
         }
     }
@@ -493,6 +510,7 @@ private struct RecordStage: View {
     @ViewBuilder private var leaveButtons: some View {
         Button("New Tape") { record.startAnotherTape() }
             .buttonStyle(.paperStandard)
+            .accessibilityLabel("New Tape")
             // Saving would otherwise write the old tape's side back over the reset.
             .disabled(record.isFinishing)
         Button("Shelf") {
@@ -500,6 +518,7 @@ private struct RecordStage: View {
             model.leaveRecording()
         }
         .buttonStyle(.paperStandard)
+        .accessibilityLabel("Shelf")
         .disabled(record.isFinishing)
     }
 
@@ -753,6 +772,7 @@ private struct RecordSetup: View {
                         }
                         .buttonStyle(.plain)
                         .help(machine.name)
+                        .accessibilityLabel(machine.name)
                         .accessibilityAddTraits(isSelected ? .isSelected : [])
                     }
                 }
@@ -888,7 +908,8 @@ private struct MeterPanel: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.5)
                 .layoutPriority(1)
-                .accessibilityLabel("Recording time \(clock)")
+                .accessibilityLabel("Recording time")
+                .accessibilityValue(clock)
 
             VUMeter(capture: record.capture)
                 .frame(minHeight: 48, idealHeight: 48, maxHeight: tallestMeter)

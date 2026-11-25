@@ -64,6 +64,8 @@ private struct TapeResult: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(result.title)
+            .accessibilityValue(meta)
 
             ForEach(result.moments) { moment in
                 Button {
@@ -84,6 +86,7 @@ private struct TapeResult: View {
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(Text(highlighted(moment.snippet)))
                 .accessibilityHint("Plays from \(TimeLabel.clock(moment.time))")
             }
         }

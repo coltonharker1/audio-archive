@@ -159,6 +159,7 @@ struct ReadAlongView: View {
                         isFollowing = true
                     }
                     .buttonStyle(.paperPrimary)
+                    .accessibilityLabel("Follow along")
                     .padding(.bottom, 16)
                 }
             }
@@ -238,6 +239,7 @@ private struct LineRow: View {
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(segment.text)
             .accessibilityHint("Plays from here")
             .accessibilityAddTraits(position == .current ? .isSelected : [])
             .contextMenu {
@@ -291,7 +293,9 @@ private struct LineRow: View {
             HStack {
                 Button("Save") { onFinishEditing(draft) }
                     .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityLabel("Save")
                 Button("Cancel") { onFinishEditing(nil) }
+                    .accessibilityLabel("Cancel")
             }
             .buttonStyle(.paperSmall)
         }
@@ -350,6 +354,7 @@ private struct ReadAlongDetails: View {
                                 }
                                 .buttonStyle(.plain)
                                 .help("Search every tape for \(name)")
+                                .accessibilityLabel(name)
                             }
                         }
                     }
@@ -412,6 +417,7 @@ private struct ReadAlongDetails: View {
                 Task { await model.requestSummary(tape) }
             }
             .buttonStyle(.paperStandard)
+            .accessibilityLabel(hasSummary ? "Rewrite Summary" : "Write a Summary")
             .disabled(tape.status.isActive || readAlong?.transcriptModel == nil)
 
             hint("Summaries are reference for what you write in Site Post. They’re never published by themselves.")
@@ -430,6 +436,7 @@ private struct ReadAlongDetails: View {
             } else if readAlong.candidate != nil {
                 Button("Compare transcripts…") { model.isComparingTranscripts = true }
                     .buttonStyle(.paperPrimary)
+                    .accessibilityLabel("Compare transcripts…")
                 hint("The new transcript is ready. Nothing changes until you choose.")
             } else {
                 Button("Try a Better Transcript") {
@@ -438,6 +445,7 @@ private struct ReadAlongDetails: View {
                     }
                 }
                 .buttonStyle(.paperStandard)
+                .accessibilityLabel("Try a Better Transcript")
                 .disabled(!canCompare)
                 hint("Listens again with the \(other) model. You’ll compare them before anything changes.")
             }

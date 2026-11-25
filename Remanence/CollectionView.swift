@@ -73,8 +73,10 @@ struct CollectionView: View {
                 PageHeader(eyebrow: "Collection", title: name, subtitle: found, size: size) {
                     Button("Edit collection…") { sheet = .edit }
                         .buttonStyle(.paperStandard)
+                        .accessibilityLabel("Edit collection…")
                     Button("Manage site draft…") { sheet = .site }
                         .buttonStyle(.paperStandard)
+                        .accessibilityLabel("Manage site draft…")
                 }
                 .padding(.bottom, 25)
 
@@ -176,6 +178,7 @@ struct CollectionView: View {
                 }
                 .buttonStyle(.plain)
                 .fixedSize()
+                .accessibilityLabel("Manage photos…")
             }
             if collection.images.isEmpty {
                 Text("The box, its lid, labels, track sheets. Or drop them here.")
@@ -239,6 +242,7 @@ struct CollectionView: View {
                 Spacer(minLength: 0)
                 Button("Add reels…") { sheet = .addReels }
                     .buttonStyle(.paperStandard)
+                    .accessibilityLabel("Add reels…")
             }
             if tapes.isEmpty {
                 Text("No reels yet. Drag a tape from the shelf onto this collection in the sidebar, choose Collection in a tape’s menu, or pick this collection when you record.")
@@ -466,6 +470,7 @@ private struct ReelRow: View {
             }
             .buttonStyle(.plain)
             .help("Open \(tape.tape.title)")
+            .accessibilityLabel(tape.tape.title)
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Text(TimeLabel.clock(tape.duration))
@@ -574,6 +579,7 @@ private struct SheetHeader: View {
                 Spacer(minLength: 0)
                 Button("Done") { dismiss() }
                     .buttonStyle(.paperPrimary)
+                    .accessibilityLabel("Done")
                     .keyboardShortcut(.cancelAction)
             }
             .padding(20)
@@ -648,6 +654,7 @@ private struct EditCollectionSheet: View {
             HStack {
                 Button("Delete Collection…", role: .destructive) { confirmingDelete = true }
                     .buttonStyle(.paperStandard)
+                    .accessibilityLabel("Delete Collection…")
                 Spacer(minLength: 0)
             }
             .padding(20)
@@ -736,6 +743,7 @@ private struct CollectionPhotosSheet: View {
                 HStack(spacing: 10) {
                     Button("Add Photos…", systemImage: "photo.badge.plus") { choose() }
                         .buttonStyle(.paperStandard)
+                        .accessibilityLabel("Add Photos…")
                     Text("The box, its lid, labels, track sheets. Or drop them here.")
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.muted)
@@ -841,6 +849,7 @@ private struct CollectionSiteSheet: View {
                 HStack {
                     Button("Remove from Site…", role: .destructive) { confirmingRemove = true }
                         .buttonStyle(.paperStandard)
+                        .accessibilityLabel("Remove from Site…")
                         .disabled(isBusy)
                     Spacer(minLength: 0)
                 }
@@ -886,14 +895,17 @@ private struct CollectionSiteSheet: View {
                     if !record.isOnSite {
                         Button("Push to Site") { send(nil) }
                             .buttonStyle(.paperPrimary)
+                            .accessibilityLabel("Push to Site")
                             .disabled(isBusy)
                             .help("Sends it as an unpublished draft, with its write-up, photos and reels")
                     } else {
                         Button("Send Changes") { send(nil) }
                             .buttonStyle(.paperPrimary)
+                            .accessibilityLabel("Send Changes")
                             .disabled(isBusy || !collection.hasUnsentChanges)
                         Button(record.sitePublished ? "Unpublish" : "Publish") { send(!record.sitePublished) }
                             .buttonStyle(.paperStandard)
+                            .accessibilityLabel(record.sitePublished ? "Unpublish" : "Publish")
                             .disabled(isBusy)
                     }
                 }
@@ -995,9 +1007,11 @@ private struct AddReelsSheet: View {
                 Spacer(minLength: 0)
                 Button("Cancel") { dismiss() }
                     .buttonStyle(.paperStandard)
+                    .accessibilityLabel("Cancel")
                     .keyboardShortcut(.cancelAction)
                 Button(chosen.count > 1 ? "Add \(chosen.count) reels" : "Add reel") { add(chosen) }
                     .buttonStyle(.paperPrimary)
+                    .accessibilityLabel(chosen.count > 1 ? "Add \(chosen.count) reels" : "Add reel")
                     .keyboardShortcut(.defaultAction)
                     .disabled(chosen.isEmpty)
             }
@@ -1045,6 +1059,8 @@ private struct AddReelsSheet: View {
                 .contentShape(.rect)
             }
             .toggleStyle(.checkbox)
+            .accessibilityLabel([tape.tape.catalogNumber, tape.tape.title].compactMap(\.self).joined(separator: ", "))
+            .accessibilityHint(current.map { "In \($0)" } ?? "")
             .padding(.vertical, 9)
             HairlineRule()
         }

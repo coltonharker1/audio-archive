@@ -270,6 +270,7 @@ struct SitePostView: View {
                 // Typing saves by itself. This saves without the wait.
                 Button("Save") { saveNow() }
                     .buttonStyle(.paperStandard)
+                    .accessibilityLabel("Save")
                     .disabled(isLocked)
                     .help("Save now. Changes also save by themselves.")
             }
@@ -387,6 +388,7 @@ struct SitePostView: View {
             isEditingFinding.toggle()
         }
         .buttonStyle(.paperSmall)
+        .accessibilityLabel(isEditingFinding ? "Hide finding details" : "Edit finding details…")
     }
 
     // MARK: Tracks
@@ -440,6 +442,8 @@ struct SitePostView: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(typed.isEmpty ? unnamed : typed)
+        .accessibilityValue(TimeLabel.clock(track.duration))
         .accessibilityHint(isOpen ? "Closes its name and description" : "Opens its name and description")
 
         if isOpen {
@@ -566,11 +570,13 @@ struct SitePostView: View {
         if let action = status.mainAction {
             Button(action.title) { perform(action) }
                 .buttonStyle(PaperButtonStyle(isPrimary: action != .stop))
+                .accessibilityLabel(action.title)
                 .disabled(!status.isEnabled(action))
         }
         if let action = status.besideAction {
             Button(action.title) { perform(action) }
                 .buttonStyle(.paperStandard)
+                .accessibilityLabel(action.title)
                 .disabled(!status.isEnabled(action))
         }
     }
@@ -674,6 +680,7 @@ struct SitePostView: View {
                 } else if status.stage == .needsKey {
                     Button("Enter Site Key…") { showsStatus = true }
                         .buttonStyle(.paperStandard)
+                        .accessibilityLabel("Enter Site Key…")
                 } else {
                     if status.stage == .pushing {
                         Text(progressLabel)
@@ -705,6 +712,7 @@ struct SitePostView: View {
                 .accessibilityLabel("Site sync API key")
             Button("Save Key") { saveKey() }
                 .buttonStyle(.paperPrimary)
+                .accessibilityLabel("Save Key")
                 .disabled(key.isEmpty)
         }
     }
@@ -829,6 +837,7 @@ struct SitePostView: View {
         }
         .buttonStyle(.plain)
         .fixedSize()
+        .accessibilityLabel(title)
     }
 
     private func editor(_ text: Binding<String>, font: Font, minHeight: CGFloat, label: String) -> some View {
@@ -892,6 +901,7 @@ private struct PhotosSheet: View {
                 Spacer(minLength: 0)
                 Button("Done") { dismiss() }
                     .buttonStyle(.paperPrimary)
+                    .accessibilityLabel("Done")
                     .keyboardShortcut(.cancelAction)
             }
             .padding(20)
@@ -928,6 +938,7 @@ private struct PhotosSheet: View {
                 HStack(spacing: 10) {
                     Button("Add Photos…", systemImage: "photo.badge.plus") { choose() }
                         .buttonStyle(.paperStandard)
+                        .accessibilityLabel("Add Photos…")
                         .disabled(isLocked)
                     Text(isLocked
                          ? "Refresh from the site before changing its photos."

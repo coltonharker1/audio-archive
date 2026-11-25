@@ -109,6 +109,7 @@ private struct TapeHeader: View {
                     }
                     .buttonStyle(.plain)
                     .help("Open \(collection.collection.name)")
+                    .accessibilityLabel(collection.collection.name)
                 }
                 separator
             }
@@ -290,6 +291,7 @@ private struct TapeTabs: View {
                 }
                 .buttonStyle(.plain)
                 .fixedSize()
+                .accessibilityLabel(tab.tabTitle ?? "")
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
             Spacer(minLength: 0)

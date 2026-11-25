@@ -249,6 +249,7 @@ struct CatalogView: View {
                     if !model.catalogStaging.staged.isEmpty { confirming = true }
                 }
                 .buttonStyle(.paperPrimary)
+                .accessibilityLabel(applyTitle(pending.count))
                 .keyboardShortcut(.defaultAction)
                 .disabled((pending.isEmpty && typing.isEmpty) || model.isApplyingCatalog)
                 Button("Revert") {
@@ -256,6 +257,7 @@ struct CatalogView: View {
                     model.revertCatalog()
                 }
                 .buttonStyle(.paperStandard)
+                .accessibilityLabel("Revert")
                 .disabled(pending.isEmpty || model.isApplyingCatalog)
                 if model.isApplyingCatalog {
                     ProgressView()

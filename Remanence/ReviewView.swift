@@ -572,6 +572,7 @@ private struct TransportRow: View {
         }
         .buttonStyle(.paperStandard)
         .help("Add a marker at the playhead (M)")
+        .accessibilityLabel("Add marker")
     }
 }
 
@@ -642,12 +643,16 @@ private struct MarkerRow: View {
             Button(review.isHearingJoin ? "Playing…" : "Hear the join") { endTyping(); review.hearJoin() }
                 .disabled(review.isHearingJoin)
                 .help("Play a few seconds either side of this marker (H)")
+                .accessibilityLabel(review.isHearingJoin ? "Playing…" : "Hear the join")
             Button("−0.1 s") { endTyping(); review.nudgeSelection(by: -0.1) }
                 .help("Move the marker earlier (←)")
+                .accessibilityLabel("−0.1 s")
             Button("+0.1 s") { endTyping(); review.nudgeSelection(by: 0.1) }
                 .help("Move the marker later (→)")
+                .accessibilityLabel("+0.1 s")
             Button("Delete", role: .destructive) { endTyping(); review.deleteSelectedMarker() }
                 .help("Delete this marker (Delete key)")
+                .accessibilityLabel("Delete")
         }
         .buttonStyle(.paperSmall)
     }
@@ -689,6 +694,7 @@ private struct TrimRow: View {
             }
         }
         .help("Keep this whole side from the playhead onward. To trim one track, use Edit.")
+        .accessibilityLabel("Trim side start")
         Button {
             endTyping()
             review.setTrimEnd()
@@ -699,15 +705,18 @@ private struct TrimRow: View {
             }
         }
         .help("Keep this whole side up to the playhead. To trim one track, use Edit.")
+        .accessibilityLabel("Trim side end")
         if isTrimmed {
             Button("Reset") { endTyping(); review.resetTrim() }
                 .help("Keep the whole side again")
+                .accessibilityLabel("Reset")
         }
     }
 
     private var undo: some View {
         Button("Undo") { endTyping(); review.undo() }
             .help("Undo a marker or trim change (⌘Z). Redo with ⌘⇧Z.")
+            .accessibilityLabel("Undo")
     }
 }
 
@@ -801,6 +810,7 @@ private struct EditSelectedTrack: View {
                     }
                 }
                 .buttonStyle(.paperPrimary)
+                .accessibilityLabel("Edit selected track")
 
                 Text(note)
                     .font(.system(size: 12))

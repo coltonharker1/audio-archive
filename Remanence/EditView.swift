@@ -513,6 +513,7 @@ private struct CloseUpSection: View {
                 .accessibilityLabel("Zoom In")
             Button("Whole track") { edit.endTyping(); edit.setZoom(span: lane.spanLength) }
                 .disabled(edit.zoomSpan >= lane.spanLength - 0.001)
+                .accessibilityLabel("Whole track")
         }
         .buttonStyle(.paperSmall)
     }
@@ -570,6 +571,7 @@ private struct CloseUpSection: View {
             }
         }
         .buttonStyle(.paperStandard)
+        .accessibilityLabel("Split at playhead")
         .disabled(!edit.canSplit(lane))
         .help("Split at the playhead. Hold Option to split exactly there.")
     }
@@ -914,6 +916,7 @@ private struct ReturnToSide: View {
             }
         }
         .buttonStyle(.paperStandard)
+        .accessibilityLabel(TrackHandoff.returnTitle(side: side))
         .help("Review this recording at the same moment")
     }
 }
@@ -955,6 +958,7 @@ private struct TrackSettings: View {
             .accessibilityValue(Self.decibels(settings.gainDB))
             Button(edit.measuring.contains(lane.id) ? "Measuring…" : "Fit") { edit.fitLevel(lane) }
                 .buttonStyle(.paperSmall)
+                .accessibilityLabel(edit.measuring.contains(lane.id) ? "Measuring…" : "Fit")
                 .disabled(edit.measuring.contains(lane.id))
                 .help("Raise or lower the level so the loudest moment sits just under the top")
         }
@@ -1074,6 +1078,7 @@ private struct TrackActions: View {
 
             Button("Join with previous…") { edit.endTyping(); confirmsJoin = true }
                 .disabled(!edit.canJoin(lane))
+                .accessibilityLabel("Join with previous…")
 
             Menu("Append to another track…") {
                 ForEach(targets) { target in
@@ -1089,22 +1094,27 @@ private struct TrackActions: View {
 
             if lane.isAppended {
                 Button("Detach into its own track") { edit.detach(lane) }
+                    .accessibilityLabel("Detach into its own track")
             }
 
             HStack(spacing: 8) {
                 Button("Move up") { edit.move(lane, by: -1) }
                     .disabled(!edit.canMove(lane, by: -1))
+                    .accessibilityLabel("Move up")
                 Text("/")
                     .foregroundStyle(Theme.muted)
                     .accessibilityHidden(true)
                 Button("Move down") { edit.move(lane, by: 1) }
                     .disabled(!edit.canMove(lane, by: 1))
+                    .accessibilityLabel("Move down")
             }
 
             Button("Reset trim") { edit.resetTrim(lane) }
                 .disabled(!lane.track.isCut)
+                .accessibilityLabel("Reset trim")
             Button("Reset level, speed and direction") { edit.set(.none, for: lane) }
                 .disabled(edit.adjustments(for: lane).isNeutral)
+                .accessibilityLabel("Reset level, speed and direction")
         }
         .buttonStyle(ActionLineStyle())
         .font(.system(size: 13))
