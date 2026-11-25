@@ -329,7 +329,8 @@ private struct ZoomedWaveform: View {
                 Canvas { context, size in
                     let columns = max(1, Int(size.width / 2))
                     let levels = waveform.levels(from: start, to: start + span, columns: columns)
-                    drawLevels(levels, in: CGSize(width: size.width, height: size.height - Self.flagRoom), context: context) { index in
+                    // The padding below already leaves the flags their room.
+                    drawLevels(levels, in: size, context: context) { index in
                         let time = start + span * (Double(index) + 0.5) / Double(columns)
                         return time >= trimStart && time <= trimEnd ? WaveformColors.kept : WaveformColors.trimmed
                     }

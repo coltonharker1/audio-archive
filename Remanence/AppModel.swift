@@ -231,12 +231,13 @@ final class AppModel {
 
     var sidebarSelection: SidebarItem {
         get {
-            switch route {
+            // Search shows where clearing it will go back to.
+            switch route == .search ? routeAfterSearch : route {
             case .record: .recording
             case .catalog: .catalog
             case .sitePosts: .sitePosts
             case .setup: .setup
-            // Search and a tape's screens belong to the shelf or the collection.
+            // A tape's screens belong to the shelf or the collection.
             case .shelf, .search, .readAlong, .review, .post, .edit:
                 selectedCollectionID.map(SidebarItem.collection) ?? .shelf
             }
@@ -637,7 +638,10 @@ final class AppModel {
         guard route == .review, let tape = selectedTape, let sourceID = selectedItem?.source.id else { return }
         reviewModel.pause()
         let restoring = restoringPlayhead.flatMap { $0.sourceID == sourceID ? $0.time : nil }
-        let place = TrackHandoff.Place(sourceID: sourceID, time: restoring ?? player.preciseTime)
+        // Opens the track the screen names, which follows the coarser currentTime.
+        let starts = reviewModel.review.flatMap { $0.source.id == sourceID ? $0.tracks.map(\.start) : nil } ?? []
+        let precise = TrackHandoff.time(player.preciseTime, onTrackAt: player.currentTime, starts: starts)
+        let place = TrackHandoff.Place(sourceID: sourceID, time: restoring ?? precise)
         rememberPosition()
         editModel.arrive(tapeID: tape.id, at: place)
         show(tab: .edit)

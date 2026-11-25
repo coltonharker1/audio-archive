@@ -267,7 +267,8 @@ private struct LineRow: View {
     private var textColor: Color {
         switch position {
         case .current: Theme.ink
-        case .past: Theme.muted.opacity(0.85)
+        // Plain muted is about 5.6 to 1 on paper. Any lighter falls under 4.5 to 1.
+        case .past: Theme.muted
         case .upcoming: Theme.ink.opacity(0.72)
         }
     }

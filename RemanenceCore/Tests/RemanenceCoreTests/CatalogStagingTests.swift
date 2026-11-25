@@ -143,6 +143,19 @@ import Testing
         #expect(staging.order == [1, 2, 3, 4])
     }
 
+    /// Leaving the Catalog and coming back follows the same shelf again. Staged
+    /// changes last until Apply, Revert or quit, so nothing may be lost.
+    @Test func comingBackToTheCatalogKeepsWhatsStaged() {
+        var staging = staging(shelf)
+        staging.move(from: [0], to: 4, in: shelf)
+        _ = staging.commitTyping("40", for: 5, in: shelf)
+        let before = staging
+        staging.follow(shelf)
+        staging.follow(shelf)
+        #expect(staging == before)
+        #expect(proposed(staging, shelf) == [2: "RA-011", 3: "RA-012", 4: "RA-013", 1: "RA-014", 5: "RA-040"])
+    }
+
     @Test func withNothingStagedTheListFollowsTheShelf() {
         var staging = staging(shelf)
         let later = [tape(6, "RA-001")] + shelf.dropFirst()

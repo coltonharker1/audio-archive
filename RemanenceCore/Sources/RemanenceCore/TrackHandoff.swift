@@ -37,6 +37,20 @@ public enum TrackHandoff {
             ?? starts.indices.min { starts[$0] < starts[$1] }
     }
 
+    /// The moment to hand on when the screen names the track holding `shown`, but
+    /// the player has since got to `precise`. The screen's time updates only a few
+    /// times a second, so just past a marker it can still name the earlier track.
+    /// A precise time on another track is kept inside the named one, short of
+    /// where the next starts, so what opens is the track the screen names.
+    public static func time(_ precise: Double, onTrackAt shown: Double, starts: [Double]) -> Double {
+        guard let named = index(at: shown, starts: starts), index(at: precise, starts: starts) != named else {
+            return precise
+        }
+        let start = starts[named]
+        let last = starts.filter { $0 > start }.min().map { max(start, $0 - inset) } ?? precise
+        return min(last, max(start, precise))
+    }
+
     /// The piece holding a moment of a recording, whether it's a track of its own or
     /// appended to one, and the nearest time to that moment which it plays. A moment
     /// trimmed off the track or the recording goes to the nearest edge of what's

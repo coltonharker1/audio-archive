@@ -53,6 +53,26 @@ import Testing
         #expect(try arrive(33.9).piece.startMarkerID == nil)
     }
 
+    /// Review's note names the track at its coarse time. Just past a marker the
+    /// player is already on the next, and Edit must still open the one named.
+    @Test func aHandoffJustPastAMarkerOpensTheTrackTheScreenNames() throws {
+        let starts = Self.tracks.map(\.spanStart)
+        let time = TrackHandoff.time(34.2, onTrackAt: 33.9, starts: starts)
+        #expect(time < 34)
+        #expect(time > 33.9)
+        #expect(try arrive(time).piece.startMarkerID == nil)
+    }
+
+    @Test func aHandoffOnTheNamedTrackKeepsThePreciseTime() {
+        let starts = Self.tracks.map(\.spanStart)
+        #expect(TrackHandoff.time(42.37, onTrackAt: 42.2, starts: starts) == 42.37)
+        // Caught up to the marker, both name the later track.
+        #expect(TrackHandoff.time(34.2, onTrackAt: 34, starts: starts) == 34.2)
+        // On the last track there's no later one to stay short of.
+        #expect(TrackHandoff.time(101, onTrackAt: 100.8, starts: starts) == 101)
+        #expect(TrackHandoff.time(12, onTrackAt: 11.8, starts: []) == 12)
+    }
+
     @Test func trimmedOffPartsGoToTheNearestKeptEdge() throws {
         // The first track leaves out its last four seconds, the second its first two.
         let tracks = [

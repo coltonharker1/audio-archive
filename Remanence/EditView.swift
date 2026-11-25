@@ -228,7 +228,8 @@ private struct LaneRow: View {
             .contentShape(.rect)
             .onTapGesture { edit.toggleExpanded(lane) }
 
-            // The waveform keeps its own clicks, which place the playhead.
+            // The waveform keeps its own clicks, which place the playhead and select
+            // the track without closing it.
             LaneWaveform(lane: lane, settings: settings)
                 .frame(height: isSelected ? 48 : 30)
                 .padding(.bottom, 8)
@@ -290,8 +291,9 @@ private struct LaneRow: View {
                     .fixedSize()
                     .help("Its place on the site")
             }
-            // Where it is on its recording, when that says more than its place on the site.
-            if lane.isAppended || lane.label != "\(lane.number)" {
+            // Where it is on its recording, when that says more than its place on the
+            // site. A sided track's "Side A" further along already says it.
+            if lane.isAppended || (lane.side == nil && lane.label != "\(lane.number)") {
                 Text(lane.label)
                     .font(Theme.mono(11))
                     .foregroundStyle(Theme.muted)
@@ -436,7 +438,6 @@ private struct LaneWaveform: View {
                 TrimOverlay(lane: lane, windowStart: 0, windowSpan: lane.spanLength)
             }
             .contentShape(.rect)
-            .simultaneousGesture(TapGesture(count: 2).onEnded { edit.toggleExpanded(lane) })
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
@@ -448,6 +449,10 @@ private struct LaneWaveform: View {
                     .onEnded { value in
                         let fraction = min(1, max(0, value.location.x / max(1, geometry.size.width)))
                         edit.endScrub(lane, atOffset: fraction * lane.spanLength)
+                        // The track with the playhead is the one the close-up and the
+                        // inspector change. Opened after the seek, so a long track
+                        // zooms in around the click.
+                        if edit.expandedLaneID != lane.id { edit.toggleExpanded(lane) }
                     }
             )
         }
@@ -813,8 +818,8 @@ private struct Inspector: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // As in the mock, the way back sits right under the drag hint, unruled.
             settings
-            HairlineRule()
             ReturnToSide()
                 .padding(.vertical, 12)
         }

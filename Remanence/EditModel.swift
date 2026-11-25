@@ -89,6 +89,9 @@ final class EditModel {
               index + 1 < lanes.count, lanes[index + 1].isAppended else { return }
         let next = lanes[index + 1]
         guard load(next) else { return }
+        // The close-up goes on with it, so its clock and playhead keep showing
+        // what's heard.
+        if expandedLaneID == key { expand(next) }
         player.play()
     }
 
@@ -388,6 +391,11 @@ final class EditModel {
             expandedLaneID = nil
             return
         }
+        expand(lane)
+    }
+
+    /// Selects a track and opens its close-up, leaving any typing alone.
+    private func expand(_ lane: Lane) {
         expandedLaneID = lane.id
         let length = lane.spanLength
         zoomSpan = length

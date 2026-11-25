@@ -75,6 +75,9 @@ struct ShelfView: View {
                     .padding(.top, 12)
                 Spacer(minLength: 0)
             } else {
+                // The hero's row is marked only while no other row is picked, so one
+                // row at a time looks selected.
+                let pickedElsewhere = tapes.contains { $0.id == model.selectedTapeID && $0.id != last?.tape.id }
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(tapes) { tape in
@@ -82,7 +85,7 @@ struct ShelfView: View {
                                 tape: tape,
                                 columns: columns,
                                 size: size,
-                                isLastOpened: tape.id == last?.tape.id,
+                                isLastOpened: tape.id == last?.tape.id && !pickedElsewhere,
                                 verticalPadding: isTight ? 10 : 11
                             )
                         }
@@ -117,11 +120,37 @@ private struct LastOpened: View {
         ["Last opened", tape.tape.catalogNumber].compactMap(\.self).joined(separator: "  /  ")
     }
 
+    /// Medium and length. The collection, if any, comes first as a link.
     private var details: String {
         let medium = tape.tape.medium.map { SiteMedium(rawValue: $0)?.label ?? $0 }
-        return [model.collection(of: tape)?.collection.name, medium, TimeLabel.clock(tape.duration)]
+        return [medium, TimeLabel.clock(tape.duration)]
             .compactMap(\.self)
             .joined(separator: "  ·  ")
+    }
+
+    /// The collection opens from here, as it does from the tape's row.
+    private var subtitle: some View {
+        HStack(spacing: 0) {
+            if let collection = model.collection(of: tape) {
+                Button {
+                    model.sidebarSelection = .collection(collection.id)
+                } label: {
+                    Text(collection.collection.name)
+                        .lineLimit(1)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .help("Open \(collection.collection.name)")
+                Text("  ·  ")
+                    .fixedSize()
+            }
+            Text(details)
+                .lineLimit(1)
+                .fixedSize()
+                .help(details)
+        }
+        .font(.system(size: 14))
+        .foregroundStyle(Theme.muted)
     }
 
     var body: some View {
@@ -140,11 +169,7 @@ private struct LastOpened: View {
                     .help(tape.tape.title)
                     .padding(.vertical, 7)
                     .accessibilityAddTraits(.isHeader)
-                Text(details)
-                    .font(.system(size: 14))
-                    .foregroundStyle(Theme.muted)
-                    .lineLimit(1)
-                    .help(details)
+                subtitle
                 HStack(spacing: 12) {
                     Button("\(resumable.buttonTitle)  →") { model.resume() }
                         .buttonStyle(.paperPrimary)
@@ -263,7 +288,7 @@ private struct ShelfRow: View {
     let tape: ShelfTape
     let columns: ShelfColumns
     let size: LayoutSize
-    /// The tape the hero shows, whose row is marked too.
+    /// The tape the hero shows, whose row is marked too while no other row is picked.
     let isLastOpened: Bool
     let verticalPadding: CGFloat
 

@@ -387,6 +387,9 @@ private struct EmptyShelfView: View {
         .padding(.horizontal, 25)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        // An empty shelf has no tapes at work, so its footer note is blank, as the
+        // shelf's is when nothing is running.
+        .onAppear { model.footerNote = "" }
     }
 }
 
