@@ -287,7 +287,10 @@ final class AppModel {
 
     func refresh() async {
         for requirement in requirements where downloads[requirement.id] == nil {
-            states[requirement.id] = await SetupCatalog.check(requirement)
+            let state = await SetupCatalog.check(requirement)
+            // A cancelled check stops its tool early, so its result means nothing.
+            guard !Task.isCancelled else { return }
+            states[requirement.id] = state
         }
         hasChecked = true
         await startPipelineIfReady()

@@ -74,6 +74,29 @@ private final class Reported: @unchecked Sendable {
         }
     }
 
+    /// Cancelling used to stop the wait early and read the running tool's exit
+    /// reason, which raises an Objective-C exception and aborts the app.
+    @Test func cancellingStopsTheToolAndWaitsForIt() async throws {
+        // The script writes its process ID, then becomes the long-running sleep.
+        let path = try script("long", #"echo $$ > "$0.pid"; exec /bin/sleep 30"#)
+        let pidPath = path.appendingPathExtension("pid")
+
+        let started = ContinuousClock.now
+        let task = Task { try await runTool(path, arguments: [], timeout: .seconds(60)) }
+        while !FileManager.default.fileExists(atPath: pidPath.path) {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let text = try String(contentsOf: pidPath, encoding: .utf8)
+        let pid = try #require(Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)))
+        #expect(kill(pid, 0) == 0)
+
+        task.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        #expect(ContinuousClock.now - started < .seconds(10))
+        // The tool has been reaped, so its process ID is gone.
+        #expect(kill(pid, 0) == -1 && errno == ESRCH)
+    }
+
     @Test func modelSizeDecidesItsState() async throws {
         let path = directory.appending(path: "model.bin")
         #expect(await SetupCatalog.check(model(at: path, minimum: 10)) == .missing)

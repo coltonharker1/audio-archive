@@ -190,11 +190,8 @@ func runTool(
     process.standardOutput = standardOutput
     process.standardError = FileHandle.nullDevice
 
-    let exited = AsyncStream<Void>.makeStream()
-    process.terminationHandler = { _ in
-        exited.continuation.yield()
-        exited.continuation.finish()
-    }
+    let exited = ExitSignal()
+    process.terminationHandler = { _ in exited.fire() }
     try process.run()
 
     let timeoutTask = Task {
@@ -203,10 +200,46 @@ func runTool(
     }
     defer { timeoutTask.cancel() }
 
-    for await _ in exited.stream { break }
+    // Always wait for the real exit. Reading terminationReason or terminationStatus
+    // of a running process raises an Objective-C exception and aborts the app, and
+    // a cancelled task would otherwise stop waiting early. Cancelling stops the tool
+    // instead, then waits for it to go.
+    await withTaskCancellationHandler {
+        await exited.wait()
+    } onCancel: {
+        process.terminate()
+    }
 
+    try Task.checkCancellation()
     if process.terminationReason == .uncaughtSignal, !timeoutTask.isCancelled {
         throw ToolError.timedOut
     }
     return process.terminationStatus
+}
+
+/// Fires once when a process exits. Unlike an AsyncStream, waiting on it doesn't
+/// end early when the waiting task is cancelled.
+private final class ExitSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var hasFired = false
+    private var waiter: CheckedContinuation<Void, Never>?
+
+    func fire() {
+        let toResume: CheckedContinuation<Void, Never>? = lock.withLock {
+            hasFired = true
+            defer { waiter = nil }
+            return waiter
+        }
+        toResume?.resume()
+    }
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            let alreadyFired = lock.withLock {
+                if !hasFired { waiter = continuation }
+                return hasFired
+            }
+            if alreadyFired { continuation.resume() }
+        }
+    }
 }
