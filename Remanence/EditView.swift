@@ -1,21 +1,20 @@
 import RemanenceCore
 import SwiftUI
 
-/// Every track of a tape as its own lane, with its level, speed and direction.
+/// A tape's tracks in site order, a close-up of the selected one, and its level,
+/// speed, direction and trims beside them.
 struct EditView: View {
     @Environment(AppModel.self) private var model
     @State private var pendingAppend: PendingAppend?
 
     let tape: ShelfTape
+    @Binding var showsInspector: Bool
+    let size: LayoutSize
 
     private var edit: EditModel { model.editModel }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-                .padding(.horizontal, 28)
-                .padding(.vertical, 10)
-
+        Group {
             if edit.lanes.isEmpty {
                 VStack(spacing: 10) {
                     ProgressView()
@@ -24,41 +23,43 @@ struct EditView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(edit.lanes.enumerated()), id: \.element.id) { index, lane in
-                            if !lane.isAppended {
-                                if edit.hasSides, sideChanges(at: index) {
-                                    SideHeader(lane: lane, locked: edit.isOnSite)
-                                        .padding(.top, index == 0 ? 0 : 12)
-                                }
-                                DropGap(locked: edit.isOnSite) { moving in
-                                    edit.move(moving, before: lane.number - 1)
-                                }
-                            }
-                            LaneView(lane: lane) { moving in
-                                guard let moving = edit.lanes.first(where: { $0.id == moving }),
-                                      edit.canAppend(moving, to: lane) else { return false }
-                                pendingAppend = PendingAppend(moving: moving, target: edit.headLane(of: lane))
-                                return true
-                            }
-                            .padding(.leading, lane.isAppended ? 28 : 0)
-                            .padding(.top, lane.isAppended ? 8 : 0)
+                HStack(alignment: .top, spacing: size == .regular ? 28 : 16) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        trackList
+                        HairlineRule()
+                        CloseUpSection(size: size)
+                        // The inspector says this too, so it's only here without it.
+                        if !showsInspector {
+                            SettingsNote(locked: edit.isOnSite)
+                                .lineLimit(2)
+                                .padding(.bottom, 8)
                         }
-                        DropGap(locked: edit.isOnSite) { moving in
-                            edit.move(moving, before: edit.headLanes.count)
-                        }
-                        EditHints()
-                            .padding(.top, 4)
                     }
-                    .padding(.horizontal, 28)
-                    .padding(.bottom, 20)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
+                    if showsInspector {
+                        Inspector(size: size) { moving, target in
+                            pendingAppend = PendingAppend(moving: moving, target: target)
+                        }
+                        .frame(width: size.rightColumn)
+                    }
                 }
+                .padding(.horizontal, 28)
             }
         }
         .background(Theme.paper)
         .task(id: tape.id) { await edit.observe(tapeID: tape.id) }
         .onDisappear { edit.leave() }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showsInspector.toggle()
+                } label: {
+                    Label("Track Settings", systemImage: "sidebar.trailing")
+                }
+                .help(showsInspector ? "Hide track settings" : "Show track settings")
+            }
+        }
         .confirmationDialog(
             pendingAppend.map { "Append \($0.moving.label) to the end of \($0.target.label)?" } ?? "",
             isPresented: Binding(get: { pendingAppend != nil }, set: { if !$0 { pendingAppend = nil } }),
@@ -71,10 +72,48 @@ struct EditView: View {
         }
     }
 
-    /// Whether this lane starts a new side, counting only tracks of their own.
-    private func sideChanges(at index: Int) -> Bool {
-        let previous = edit.lanes[..<index].last { !$0.isAppended }
-        return previous == nil || previous?.side != edit.lanes[index].side
+    /// The heading and a row for each track. This is the part that scrolls.
+    private var trackList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 14) {
+                Text("Tracks in site order")
+                    .font(Theme.serif(size.sectionTitle))
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 0)
+                Text(edit.headLanes.count == 1 ? "1 track" : "\(edit.headLanes.count) tracks")
+                    .font(Theme.mono())
+                    .foregroundStyle(Theme.ink)
+                    .fixedSize()
+            }
+            .padding(.top, 10)
+            .padding(.bottom, 2)
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(edit.lanes) { lane in
+                        if !lane.isAppended {
+                            DropGap(locked: edit.isOnSite) { moving in
+                                edit.move(moving, before: lane.number - 1)
+                            }
+                        }
+                        LaneRow(lane: lane, size: size) { moving in
+                            guard let moving = edit.lanes.first(where: { $0.id == moving }),
+                                  edit.canAppend(moving, to: lane) else { return false }
+                            pendingAppend = PendingAppend(moving: moving, target: edit.headLane(of: lane))
+                            return true
+                        }
+                        .padding(.leading, lane.isAppended ? 28 : 0)
+                        .padding(.top, lane.isAppended ? 4 : 0)
+                    }
+                    DropGap(locked: edit.isOnSite) { moving in
+                        edit.move(moving, before: edit.headLanes.count)
+                    }
+                }
+            }
+            .frame(minHeight: 60, maxHeight: .infinity)
+        }
     }
 
     private func appendMessage(_ pending: PendingAppend) -> String {
@@ -86,75 +125,33 @@ struct EditView: View {
         text += " Each piece keeps its own level, speed and direction, and nothing is cut from your recordings. You can detach it again before pushing."
         return text
     }
+}
 
-    private var header: some View {
-        Text(edit.isOnSite
+private enum EditColors {
+    static let clipped = Color(red: 0.604, green: 0.184, blue: 0.102)
+}
+
+/// What a track is called where it needs a name: its own, or its place.
+private func displayName(_ lane: EditModel.Lane) -> String {
+    if let name = lane.track.name, !name.isEmpty { return name }
+    return lane.isAppended ? "Piece \(lane.label)" : "Track \(lane.number)"
+}
+
+/// That the masters are safe, or why the settings can't be changed.
+private struct SettingsNote: View {
+    let locked: Bool
+
+    var body: some View {
+        Text(locked
              ? "This tape is on the site. Its audio there can’t be replaced yet, so these settings are locked."
              : "Level, speed and direction are heard here and applied when you push. Your masters never change.")
             .font(.system(size: 12))
-            .foregroundStyle(edit.isOnSite ? Theme.attention : Theme.inkMuted)
-            .lineLimit(2)
+            .foregroundStyle(locked ? Theme.attention : Theme.muted)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-/// A side's heading. Double-click it to rename the side.
-private struct SideHeader: View {
-    @Environment(AppModel.self) private var model
-    @State private var isEditing = false
-    @State private var name = ""
-    @FocusState private var isFocused: Bool
-
-    let lane: EditModel.Lane
-    let locked: Bool
-
-    var body: some View {
-        if isEditing {
-            HStack(spacing: 6) {
-                Text("Side")
-                    .font(Theme.display(18))
-                    .foregroundStyle(Theme.ink)
-                TextField("B", text: $name)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 14))
-                    .frame(width: 70)
-                    .focused($isFocused)
-                    .onSubmit { finish(save: true) }
-                    .onExitCommand { finish(save: false) }
-                    .onChange(of: isFocused) { _, focused in if !focused { finish(save: true) } }
-            }
-            .onAppear { DispatchQueue.main.async { isFocused = true } }
-        } else {
-            Text(lane.side.map { "Side \($0)" } ?? "Recording")
-                .font(Theme.display(18))
-                .foregroundStyle(Theme.ink)
-                .contentShape(.rect)
-                .onTapGesture(count: 2) {
-                    guard !locked, lane.side != nil else { return }
-                    name = lane.side ?? ""
-                    isEditing = true
-                }
-                .help(locked ? "" : "Double-click to rename this side")
-        }
-    }
-
-    private func finish(save: Bool) {
-        guard isEditing else { return }
-        isEditing = false
-        let new = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard save, !new.isEmpty, new != lane.side, let library = model.library else { return }
-        let sourceID = lane.track.sourceID
-        Task {
-            do {
-                try await Task.detached { try await library.renameSide(sourceID: sourceID, to: new) }.value
-            } catch {
-                model.message = error.localizedDescription
-            }
-        }
-    }
-}
-
-/// The space between two tracks. Dropping a track here moves it to this place.
+/// The rule between two tracks. Dropping a track here moves it to this place.
 private struct DropGap: View {
     @State private var isTargeted = false
 
@@ -164,9 +161,10 @@ private struct DropGap: View {
     var body: some View {
         Rectangle()
             .fill(Color.clear)
-            .frame(height: 12)
+            .frame(height: 9)
             .frame(maxWidth: .infinity)
             .overlay {
+                HairlineRule()
                 if isTargeted {
                     Capsule().fill(Theme.accent).frame(height: 3)
                 }
@@ -181,61 +179,75 @@ private struct DropGap: View {
     }
 }
 
-/// A track dropped onto another, waiting for confirmation.
+/// A track dropped onto another, or picked from the menu, waiting for confirmation.
 private struct PendingAppend {
     let moving: EditModel.Lane
     let target: EditModel.Lane
 }
 
-private struct LaneView: View {
+/// A track in the list: its place, name and length over its waveform. A click selects
+/// it, and a double-click on its name renames it.
+private struct LaneRow: View {
     @Environment(AppModel.self) private var model
     @State private var name = ""
-    @State private var confirmsJoin = false
     @State private var isDropTarget = false
     @State private var isEditingName = false
     @FocusState private var isNaming: Bool
 
     let lane: EditModel.Lane
+    let size: LayoutSize
     /// Called with the dragged lane's id when a track is dropped here.
     var onDrop: (String) -> Bool = { _ in false }
 
     private var edit: EditModel { model.editModel }
     private var settings: TrackAdjustments { edit.adjustments(for: lane) }
-    private var isLoaded: Bool { edit.player.trackKey == lane.id }
-    private var isPlaying: Bool { isLoaded && edit.player.isPlaying }
+    private var isSelected: Bool { edit.expandedLaneID == lane.id }
     private var locked: Bool { edit.isOnSite }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if lane.isAppended {
-                Label("Then, as part of the same track", systemImage: "arrow.turn.down.right")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.inkMuted)
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                if lane.isAppended {
+                    Label("Then, as part of the same track", systemImage: "arrow.turn.down.right")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(1)
+                }
+                titleRow
+                // On its own line, so the name keeps its room when the row is narrow.
+                if lane.pieceCount > 1, !lane.isAppended {
+                    Text("\(lane.pieceCount) pieces · \(TimeLabel.clock(lane.totalDuration))")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(1)
+                        .help("How long the whole track plays, with the pieces appended to it")
+                }
             }
-            titleRow
-            if edit.expandedLaneID == lane.id {
-                ZoomedLane(lane: lane, settings: settings)
-            } else {
-                LaneWaveform(lane: lane, settings: settings)
-                    .frame(height: 64)
-            }
-            controls
-                .disabled(locked)
-            warnings
+            .padding(.top, 7)
+            .padding(.bottom, 5)
+            .contentShape(.rect)
+            .onTapGesture { edit.toggleExpanded(lane) }
+
+            // The waveform keeps its own clicks, which place the playhead.
+            LaneWaveform(lane: lane, settings: settings)
+                .frame(height: isSelected ? 48 : 30)
+                .padding(.bottom, 8)
         }
-        .padding(12)
-        .background(Theme.card, in: .rect(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(
-                    isDropTarget ? Theme.accent : isLoaded ? Theme.accent.opacity(0.6) : Theme.line,
-                    lineWidth: isDropTarget ? 2 : 1
-                )
-        )
+        .padding(.horizontal, size == .regular ? 14 : 8)
+        .background(isSelected ? Theme.inset : .clear)
+        .overlay {
+            if isDropTarget {
+                RoundedRectangle(cornerRadius: 4)
+                    .strokeBorder(Theme.accent, lineWidth: 2)
+                    .allowsHitTesting(false)
+            }
+        }
         .dropDestination(for: String.self) { items, _ in
             guard let first = items.first else { return false }
             return onDrop(first)
         } isTargeted: { isDropTarget = $0 && !locked }
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .onAppear { name = lane.track.name ?? "" }
         .onChange(of: lane.track.name) { _, updated in
             if !isNaming { name = updated ?? "" }
@@ -245,11 +257,6 @@ private struct LaneView: View {
         }
         // Choosing another tab can take the field away before it loses focus.
         .onDisappear(perform: finishNaming)
-        .confirmationDialog("Join \(lane.label) onto the track before it?", isPresented: $confirmsJoin) {
-            Button("Join Tracks", role: .destructive) { edit.joinWithPrevious(lane) }
-        } message: {
-            Text("\(lane.label)’s name, description and settings are removed. It takes on the settings of the track before it.")
-        }
     }
 
     private func finishNaming() {
@@ -259,12 +266,12 @@ private struct LaneView: View {
     }
 
     private var titleRow: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: size == .regular ? 10 : 7) {
             if !locked {
                 Image(systemName: "line.3.horizontal")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.inkMuted)
-                    .frame(width: 16, height: 30)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.muted)
+                    .frame(width: 14, height: 22)
                     .contentShape(.rect)
                     .draggable(lane.id) {
                         Text(lane.track.name.flatMap { $0.isEmpty ? nil : $0 } ?? lane.label)
@@ -276,94 +283,48 @@ private struct LaneView: View {
                     .help("Drag between tracks to move it, or onto a track to append it to that track's end")
                     .accessibilityLabel("Drag \(lane.label) onto another track")
             }
-            Button {
-                edit.togglePlayback(lane)
-            } label: {
-                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.paper)
-                    .frame(width: 30, height: 30)
-                    .background(Theme.ink, in: .circle)
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(isPlaying ? "Pause \(lane.label)" : "Play \(lane.label)")
-
             if !lane.isAppended {
-                Text("\(lane.number)")
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Theme.ink)
-                    .frame(minWidth: 16, alignment: .trailing)
+                Text(trackNumberText(lane.number))
+                    .font(Theme.mono())
+                    .foregroundStyle(Theme.muted)
                     .fixedSize()
                     .help("Its place on the site")
             }
-            Text(lane.label)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(Theme.inkMuted)
-                .help("Where it is on its recording")
+            // Where it is on its recording, when that says more than its place on the site.
+            if lane.isAppended || lane.label != "\(lane.number)" {
+                Text(lane.label)
+                    .font(Theme.mono(11))
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize()
+                    .help("Where it is on its recording")
+            }
 
             nameField
 
-            if lane.pieceCount > 1, !lane.isAppended {
-                Text("\(lane.pieceCount) pieces · \(TimeLabel.clock(lane.totalDuration))")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.inkMuted)
-                    .fixedSize()
-                    .help("How long the whole track plays, with the pieces appended to it")
-            }
             if lane.track.isCut {
-                Label("Trimmed", systemImage: "scissors")
+                Image(systemName: "scissors")
                     .font(.system(size: 11))
-                    .foregroundStyle(Theme.inkMuted)
-                    .fixedSize()
+                    .foregroundStyle(Theme.muted)
                     .help(trimHelp)
+                    .accessibilityLabel("Trimmed")
             }
-            LaneClock(lane: lane, settings: settings)
-
-            Button {
-                edit.toggleExpanded(lane)
-            } label: {
-                Image(systemName: edit.expandedLaneID == lane.id
-                      ? "arrow.down.right.and.arrow.up.left"
-                      : "arrow.up.left.and.arrow.down.right")
-            }
-            .buttonStyle(.borderless)
-            .fixedSize()
-            .help(edit.expandedLaneID == lane.id ? "Close up" : "Open up and zoom in, to split precisely")
-            .accessibilityLabel(edit.expandedLaneID == lane.id ? "Close \(lane.label)" : "Zoom into \(lane.label)")
-
-            Menu {
-                Button("Split at Playhead", systemImage: "scissors") { edit.split(lane) }
-                    .disabled(!edit.canSplit(lane))
-                Button("Join with Previous Track", systemImage: "arrow.up.to.line") { confirmsJoin = true }
-                    .disabled(!edit.canJoin(lane))
-                if lane.isAppended {
-                    Button("Detach into Its Own Track", systemImage: "arrow.uturn.left") { edit.detach(lane) }
-                        .disabled(locked)
+            // The side, and how long this row plays.
+            HStack(spacing: 5) {
+                if let side = lane.side {
+                    Text("Side \(side)")
+                        .lineLimit(1)
+                    Text("/")
+                        .fixedSize()
                 }
-                Divider()
-                Button("Reset Trim") { edit.resetTrim(lane) }
-                    .disabled(!lane.track.isCut || locked)
-                Divider()
-                Button("Move Up", systemImage: "arrow.up") { edit.move(lane, by: -1) }
-                    .disabled(!edit.canMove(lane, by: -1))
-                Button("Move Down", systemImage: "arrow.down") { edit.move(lane, by: 1) }
-                    .disabled(!edit.canMove(lane, by: 1))
-                Divider()
-                Button("Reset Level, Speed and Direction") { edit.set(.none, for: lane) }
-                    .disabled(settings.isNeutral || locked)
-            } label: {
-                Image(systemName: "ellipsis.circle")
+                Text(TimeLabel.clock(settings.duration(of: lane.end - lane.start)))
+                    .fixedSize()
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("More for this track")
+            .font(Theme.mono())
+            .foregroundStyle(Theme.ink)
+            .accessibilityElement(children: .combine)
         }
     }
 
-    /// The track's name, which becomes editable on a double-click, so typing a key
-    /// meant for edit mode never lands in it.
     /// What the trim leaves out, as the track is heard.
     private var trimHelp: String {
         let heardStart = settings.reversed ? lane.track.cutEnd : lane.track.cutStart
@@ -375,6 +336,8 @@ private struct LaneView: View {
         return parts.joined(separator: ", ") + ". Drag the edges of the waveform to change it. The recording is untouched."
     }
 
+    /// The track's name, which becomes editable on a double-click, so typing a key
+    /// meant for edit mode never lands in it.
     @ViewBuilder private var nameField: some View {
         let placeholder = lane.isAppended ? "Piece name, for you only" : "Track \(lane.number)"
         if isEditingName {
@@ -396,164 +359,29 @@ private struct LaneView: View {
                 .onAppear { DispatchQueue.main.async { isNaming = true } }
                 .accessibilityLabel("Name of \(lane.label)")
         } else {
-            Text(name.isEmpty ? placeholder : name)
-                .font(.system(size: 14))
-                .foregroundStyle(name.isEmpty ? Theme.inkMuted : Theme.ink)
+            let shown = name.isEmpty ? placeholder : name
+            Text(shown)
+                .font(Theme.serif(size.rowName))
+                .foregroundStyle(name.isEmpty ? Theme.muted : Theme.ink)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(.rect)
-                .onTapGesture(count: 2) {
-                    name = lane.track.name ?? ""
-                    isEditingName = true
-                }
-                .help("Double-click to rename")
-                .accessibilityLabel("Name of \(lane.label): \(name.isEmpty ? placeholder : name)")
-                .accessibilityAction(named: "Rename") { isEditingName = true }
+                // A double-click renames without also selecting or closing the track.
+                .gesture(
+                    TapGesture(count: 2).onEnded { rename() }
+                        .exclusively(before: TapGesture().onEnded { edit.toggleExpanded(lane) })
+                )
+                .help("\(shown). Double-click to rename.")
+                .accessibilityLabel("Name of \(lane.label): \(shown)")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { edit.toggleExpanded(lane) }
+                .accessibilityAction(named: "Rename") { rename() }
         }
     }
 
-    private var controls: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 18) {
-                levelControl
-                speedControl
-                reverseControl
-                Spacer(minLength: 0)
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 18) {
-                    levelControl
-                    reverseControl
-                }
-                speedControl
-            }
-        }
-        .font(.system(size: 12))
-    }
-
-    private var levelControl: some View {
-        HStack(spacing: 6) {
-            Text("Level")
-                .foregroundStyle(Theme.inkMuted)
-                .fixedSize()
-            Slider(
-                value: Binding(
-                    get: { settings.gainDB },
-                    // Half-decibel steps, rounded here so the slider shows no tick marks.
-                    set: { edit.set(TrackAdjustments(gainDB: ($0 * 2).rounded() / 2, speed: settings.speed, reversed: settings.reversed), for: lane) }
-                ),
-                in: -18...18
-            )
-            .frame(width: 130)
-            .accessibilityLabel("Level of \(lane.label)")
-            .accessibilityValue(Self.decibels(settings.gainDB))
-            Text(Self.decibels(settings.gainDB))
-                .monospacedDigit()
-                .foregroundStyle(Theme.ink)
-                .frame(width: 54, alignment: .trailing)
-                .fixedSize()
-            Button(edit.measuring.contains(lane.id) ? "Measuring…" : "Fit") { edit.fitLevel(lane) }
-                .controlSize(.small)
-                .fixedSize()
-                .disabled(edit.measuring.contains(lane.id))
-                .help("Raise or lower the level so the loudest moment sits just under the top")
-        }
-    }
-
-    private var speedControl: some View {
-        HStack(spacing: 6) {
-            Text("Speed")
-                .foregroundStyle(Theme.inkMuted)
-                .fixedSize()
-            Button("Slower", systemImage: "minus") { setSpeed(settings.speed - 0.01) }
-                .labelStyle(.iconOnly)
-                .controlSize(.small)
-                .help("1% slower")
-            Text(Self.percent(settings.speed))
-                .monospacedDigit()
-                .foregroundStyle(Theme.ink)
-                .frame(width: 44)
-                .fixedSize()
-                .accessibilityLabel("Speed \(Self.percent(settings.speed))")
-            Button("Faster", systemImage: "plus") { setSpeed(settings.speed + 0.01) }
-                .labelStyle(.iconOnly)
-                .controlSize(.small)
-                .help("1% faster")
-            Picker("Speed preset", selection: Binding(
-                get: { [0.5, 1, 2].first { abs($0 - settings.speed) < 0.0005 } ?? 0 },
-                set: { if $0 > 0 { setSpeed($0) } }
-            )) {
-                Text("½×").tag(0.5)
-                Text("1×").tag(1.0)
-                Text("2×").tag(2.0)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 110)
-            .help("½× plays a tape recorded at half the speed it was captured at, 2× the reverse")
-        }
-    }
-
-    private var reverseControl: some View {
-        Toggle(isOn: Binding(
-            get: { settings.reversed },
-            set: { edit.set(TrackAdjustments(gainDB: settings.gainDB, speed: settings.speed, reversed: $0), for: lane) }
-        )) {
-            Label("Reverse", systemImage: "arrow.uturn.backward")
-                .fixedSize()
-        }
-        .toggleStyle(.button)
-        .controlSize(.small)
-        .fixedSize()
-        .help("Play this track backwards")
-    }
-
-    @ViewBuilder private var warnings: some View {
-        if let peak = edit.loudestPeak(of: lane), peak.decibels + settings.gainDB > -0.1, settings.gainDB > 0 {
-            Label(
-                peak.exact
-                    ? "The loudest moment will clip at this level. Try Fit."
-                    : "The loudest moment may clip at this level. Fit measures it exactly.",
-                systemImage: "exclamationmark.triangle"
-            )
-            .font(.system(size: 11))
-            .foregroundStyle(Theme.attention)
-        }
-    }
-
-    private func setSpeed(_ speed: Double) {
-        edit.set(TrackAdjustments(gainDB: settings.gainDB, speed: speed, reversed: settings.reversed), for: lane)
-    }
-
-    static func decibels(_ value: Double) -> String {
-        value == 0 ? "0 dB" : String(format: "%+.1f dB", value)
-    }
-
-    static func percent(_ speed: Double) -> String {
-        let value = speed * 100
-        return value.rounded() == value ? "\(Int(value))%" : String(format: "%.1f%%", value)
-    }
-}
-
-/// Elapsed and total time in listening order, at the adjusted speed.
-private struct LaneClock: View {
-    @Environment(AppModel.self) private var model
-
-    let lane: EditModel.Lane
-    let settings: TrackAdjustments
-
-    var body: some View {
-        let player = model.editModel.player
-        let loaded = player.trackKey == lane.id
-        let total = settings.duration(of: lane.end - lane.start)
-        TimelineView(.animation(minimumInterval: 1.0 / 10, paused: !(loaded && player.isPlaying))) { _ in
-            let elapsed = loaded ? player.elapsed : 0
-            Text(loaded ? "\(TimeLabel.clock(elapsed)) / \(TimeLabel.clock(total))" : TimeLabel.clock(total))
-                .font(.system(size: 12, design: .monospaced))
-                .monospacedDigit()
-                .foregroundStyle(Theme.inkMuted)
-                .fixedSize()
-        }
+    private func rename() {
+        name = lane.track.name ?? ""
+        isEditingName = true
     }
 }
 
@@ -564,9 +392,6 @@ private struct LaneWaveform: View {
 
     let lane: EditModel.Lane
     let settings: TrackAdjustments
-
-    private static let color = Color(red: 0.42, green: 0.384, blue: 0.337)
-    private static let clipped = Color(red: 0.604, green: 0.184, blue: 0.102)
 
     var body: some View {
         let edit = model.editModel
@@ -584,14 +409,25 @@ private struct LaneWaveform: View {
                         let height = max(1, CGFloat(level) * size.height)
                         let rect = CGRect(x: CGFloat(index) * width, y: (size.height - height) / 2,
                                           width: max(0.5, width - 0.5), height: height)
-                        context.fill(Path(rect), with: .color(level >= 0.999 ? Self.clipped : Self.color))
+                        context.fill(Path(rect), with: .color(level >= 0.999 ? EditColors.clipped : Theme.waveform))
                     }
                 }
+                // On the selected track, the stretch the close-up shows.
+                if edit.expandedLaneID == lane.id, edit.zoomSpan < lane.spanLength - 0.001 {
+                    Rectangle()
+                        .fill(Theme.accent.opacity(0.1))
+                        .overlay(Rectangle().strokeBorder(Theme.accent.opacity(0.7), lineWidth: 1))
+                        .frame(width: max(4, geometry.size.width * edit.zoomSpan / lane.spanLength), height: geometry.size.height)
+                        .offset(x: geometry.size.width * edit.zoomStart / lane.spanLength)
+                        .allowsHitTesting(false)
+                }
                 if loaded {
+                    // Reading the anchor redraws after a seek while paused.
+                    let _ = player.anchor
                     TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !player.isPlaying)) { _ in
                         let fraction = edit.offset(ofMaster: player.position, in: lane) / lane.spanLength
                         Rectangle()
-                            .fill(Color(red: 0.659, green: 0.196, blue: 0.102))
+                            .fill(Theme.needle)
                             .frame(width: 2, height: geometry.size.height)
                             .offset(x: max(0, min(1, fraction)) * (geometry.size.width - 2))
                     }
@@ -615,14 +451,151 @@ private struct LaneWaveform: View {
                     }
             )
         }
-        .background(Theme.paper.opacity(0.7), in: .rect(cornerRadius: 4))
         .accessibilityLabel("Waveform of \(lane.label)")
     }
 }
 
-/// A track opened up: a close-up to place the playhead precisely, the whole track
-/// below it showing where the close-up is, and the zoom controls.
-private struct ZoomedLane: View {
+/// The selected track up close, pinned under the list.
+private struct CloseUpSection: View {
+    @Environment(AppModel.self) private var model
+
+    let size: LayoutSize
+
+    private var edit: EditModel { model.editModel }
+
+    var body: some View {
+        if let lane = edit.expandedLane {
+            let settings = edit.adjustments(for: lane)
+            VStack(alignment: .leading, spacing: 0) {
+                heading(lane)
+                    .padding(.vertical, 6)
+                // Times as they'll be heard, at the track's speed.
+                TimeRuler(start: edit.zoomStart / settings.speed, span: max(0.001, edit.zoomSpan) / settings.speed)
+                    .frame(height: 20)
+                CloseUp(lane: lane, settings: settings)
+                    .frame(height: size == .regular ? 96 : 80)
+                    // A drag or a pinch under way belongs to one track.
+                    .id(lane.id)
+                transport(lane)
+                    .padding(.vertical, 8)
+            }
+        } else {
+            Text("Select a track")
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.muted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 14)
+        }
+    }
+
+    private func heading(_ lane: EditModel.Lane) -> some View {
+        let title = "\(displayName(lane)) · close-up"
+        return HStack(spacing: 9) {
+            Text(title)
+                .font(Theme.serif(size.sectionTitle))
+                .foregroundStyle(Theme.ink)
+                .lineLimit(1)
+                .help(title)
+                .accessibilityAddTraits(.isHeader)
+            Spacer(minLength: 0)
+            Button("−") { edit.endTyping(); edit.zoom(by: 1 / 1.5) }
+                .disabled(edit.zoomSpan >= lane.spanLength - 0.001)
+                .help("Zoom Out (-)")
+                .accessibilityLabel("Zoom Out")
+            Button("+") { edit.endTyping(); edit.zoom(by: 1.5) }
+                .disabled(edit.zoomSpan <= EditModel.minimumZoomSpan + 0.001)
+                .help("Zoom In (=)")
+                .accessibilityLabel("Zoom In")
+            Button("Whole track") { edit.endTyping(); edit.setZoom(span: lane.spanLength) }
+                .disabled(edit.zoomSpan >= lane.spanLength - 0.001)
+        }
+        .buttonStyle(.paperSmall)
+    }
+
+    /// Play, where the playhead is, and splitting there. The button drops to a
+    /// second line when the row gets narrow.
+    private func transport(_ lane: EditModel.Lane) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 9) {
+                playback(lane)
+                Spacer(minLength: 4)
+                splitButton(lane)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                playback(lane)
+                splitButton(lane)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func playback(_ lane: EditModel.Lane) -> some View {
+        let player = edit.player
+        // Playing on into a piece appended to this track still counts as this one.
+        let playingOn = edit.lanes.contains { $0.id == player.trackKey && $0.head == lane.id }
+        let isPlaying = player.isPlaying && (player.trackKey == lane.id || playingOn)
+        return HStack(spacing: 9) {
+            Button {
+                edit.endTyping()
+                if isPlaying { edit.toggleCurrent() } else { edit.togglePlayback(lane) }
+            } label: {
+                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.paper)
+                    .frame(width: 34, height: 34)
+                    .background(Theme.primary, in: .circle)
+                    .contentShape(.circle)
+            }
+            .buttonStyle(.plain)
+            .help("Play or pause this track")
+            .accessibilityLabel(isPlaying ? "Pause \(lane.label)" : "Play \(lane.label)")
+
+            TrackClock(lane: lane)
+        }
+    }
+
+    private func splitButton(_ lane: EditModel.Lane) -> some View {
+        Button {
+            edit.endTyping()
+            edit.split(lane)
+        } label: {
+            HStack(spacing: 7) {
+                Text("Split at playhead")
+                KeyLetter("M")
+            }
+        }
+        .buttonStyle(.paperStandard)
+        .disabled(!edit.canSplit(lane))
+        .help("Split at the playhead. Hold Option to split exactly there.")
+    }
+}
+
+/// How far into the track the playhead is, as heard at its speed, and where that is
+/// on the recording.
+private struct TrackClock: View {
+    @Environment(AppModel.self) private var model
+
+    let lane: EditModel.Lane
+
+    var body: some View {
+        let player = model.editModel.player
+        let loaded = player.trackKey == lane.id
+        // Reading the anchor redraws after a seek while paused.
+        let _ = player.anchor
+        TimelineView(.animation(minimumInterval: 1.0 / 10, paused: !(loaded && player.isPlaying))) { _ in
+            let reversed = model.editModel.adjustments(for: lane).reversed
+            let elapsed = TimeLabel.clock(loaded ? player.elapsed : 0)
+            let place = TimeLabel.clock(loaded ? player.position : (reversed ? lane.end : lane.start))
+            Text("Track \(elapsed) / \(lane.side == nil ? "Recording" : "Side") \(place)")
+                .font(Theme.mono())
+                .foregroundStyle(Theme.ink)
+                .fixedSize()
+        }
+    }
+}
+
+/// A close-up to place the playhead precisely. Drag to scrub, pinch to zoom.
+private struct CloseUp: View {
     @Environment(AppModel.self) private var model
     @State private var pinchStartSpan: Double?
     @State private var dragOffset: Double?
@@ -630,22 +603,7 @@ private struct ZoomedLane: View {
     let lane: EditModel.Lane
     let settings: TrackAdjustments
 
-    private static let color = Color(red: 0.42, green: 0.384, blue: 0.337)
-    private static let clipped = Color(red: 0.604, green: 0.184, blue: 0.102)
-    private static let playhead = Color(red: 0.659, green: 0.196, blue: 0.102)
-
     private var edit: EditModel { model.editModel }
-    private var length: Double { lane.spanLength }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            closeUp
-                .frame(height: 170)
-            overview
-                .frame(height: 28)
-            zoomBar
-        }
-    }
 
     /// Levels for a stretch in listening order, turned around for a reversed track.
     private func levels(from offset: Double, span: Double, columns: Int) -> [Float] {
@@ -657,33 +615,29 @@ private struct ZoomedLane: View {
         return levels
     }
 
-    private func draw(_ levels: [Float], in size: CGSize, context: GraphicsContext, top: CGFloat = 0) {
+    private func draw(_ levels: [Float], in size: CGSize, context: GraphicsContext) {
         let width = size.width / CGFloat(max(1, levels.count))
-        let height = size.height - top
         for (index, level) in levels.enumerated() {
-            let bar = max(1, CGFloat(level) * height)
-            let rect = CGRect(x: CGFloat(index) * width, y: top + (height - bar) / 2, width: max(0.5, width - 0.5), height: bar)
-            context.fill(Path(rect), with: .color(level >= 0.999 ? Self.clipped : Self.color))
+            let bar = max(1, CGFloat(level) * size.height)
+            let rect = CGRect(x: CGFloat(index) * width, y: (size.height - bar) / 2, width: max(0.5, width - 0.5), height: bar)
+            context.fill(Path(rect), with: .color(level >= 0.999 ? EditColors.clipped : Theme.waveform))
         }
     }
 
-    private var closeUp: some View {
+    var body: some View {
         GeometryReader { geometry in
             let width = geometry.size.width
             let start = edit.zoomStart
             let span = max(0.001, edit.zoomSpan)
             ZStack(alignment: .topLeading) {
                 Canvas { context, size in
-                    draw(levels(from: start, span: span, columns: max(1, Int(size.width / 2))), in: size, context: context, top: 22)
+                    draw(levels(from: start, span: span, columns: max(1, Int(size.width / 2))), in: size, context: context)
                 }
-                // Times as they'll be heard, at the track's speed.
-                TimeRuler(start: start / settings.speed, span: span / settings.speed, width: width)
-                    .allowsHitTesting(false)
                 TrimOverlay(lane: lane, windowStart: start, windowSpan: span)
                 playheadLine(start: start, span: span, width: width, height: geometry.size.height)
                 if let dragOffset {
                     Rectangle()
-                        .fill(Self.playhead.opacity(0.45))
+                        .fill(Theme.needle.opacity(0.45))
                         .frame(width: 2, height: geometry.size.height)
                         .offset(x: width * (dragOffset - start) / span)
                         .allowsHitTesting(false)
@@ -715,83 +669,25 @@ private struct ZoomedLane: View {
             .accessibilityElement()
             .accessibilityLabel("Close-up of \(lane.label)")
         }
-        .background(Theme.paper.opacity(0.7), in: .rect(cornerRadius: 4))
-        .clipShape(.rect(cornerRadius: 4))
+        .scopeBackground()
     }
 
     private func playheadLine(start: Double, span: Double, width: CGFloat, height: CGFloat) -> some View {
         let player = edit.player
         let loaded = player.trackKey == lane.id
+        // Reading the anchor redraws after a seek while paused.
+        let _ = player.anchor
         return TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !(loaded && player.isPlaying))) { _ in
             let offset = loaded ? edit.offset(ofMaster: player.position, in: lane) : -1
             let x = width * (offset - start) / span
             Rectangle()
-                .fill(Self.playhead)
+                .fill(Theme.needle)
                 .frame(width: 2, height: height)
                 .offset(x: x)
                 .opacity(loaded && x >= 0 && x <= width ? 1 : 0)
                 .onChange(of: offset) { _, _ in edit.follow(lane) }
         }
         .allowsHitTesting(false)
-    }
-
-    private var overview: some View {
-        GeometryReader { geometry in
-            let width = geometry.size.width
-            ZStack(alignment: .topLeading) {
-                Canvas { context, size in
-                    draw(levels(from: 0, span: length, columns: max(1, Int(size.width / 2))), in: size, context: context)
-                }
-                Rectangle()
-                    .fill(Theme.accent.opacity(0.14))
-                    .overlay(Rectangle().strokeBorder(Theme.accent.opacity(0.8), lineWidth: 1))
-                    .frame(width: max(4, width * edit.zoomSpan / length), height: geometry.size.height)
-                    .offset(x: width * edit.zoomStart / length)
-                    .allowsHitTesting(false)
-                TrimOverlay(lane: lane, windowStart: 0, windowSpan: length, showsHandles: false)
-                playheadLine(start: 0, span: length, width: width, height: geometry.size.height)
-            }
-            .contentShape(.rect)
-            .gesture(
-                DragGesture(minimumDistance: 0).onChanged { value in
-                    if value.translation == .zero { edit.endTyping() }
-                    let offset = length * min(1, max(0, value.location.x / max(1, width)))
-                    edit.moveZoom(to: offset - edit.zoomSpan / 2)
-                }
-            )
-            .accessibilityElement()
-            .accessibilityLabel("Whole of \(lane.label)")
-        }
-        .background(Theme.paper.opacity(0.5), in: .rect(cornerRadius: 4))
-        .clipShape(.rect(cornerRadius: 4))
-    }
-
-    private var zoomBar: some View {
-        HStack(spacing: 8) {
-            Button("Zoom Out", systemImage: "minus.magnifyingglass") { edit.zoom(by: 1 / 1.5) }
-                .labelStyle(.iconOnly)
-                .disabled(edit.zoomSpan >= length - 0.001)
-            Button("Zoom In", systemImage: "plus.magnifyingglass") { edit.zoom(by: 1.5) }
-                .labelStyle(.iconOnly)
-                .disabled(edit.zoomSpan <= EditModel.minimumZoomSpan + 0.001)
-            Button("Whole Track") { edit.setZoom(span: length) }
-                .disabled(edit.zoomSpan >= length - 0.001)
-            Text("Showing \(TimeLabel.clock(edit.zoomSpan / settings.speed))")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(Theme.inkMuted)
-                .fixedSize()
-            Spacer(minLength: 8)
-            Text("Click to place the playhead, then split. Drag the edges to trim. Pinch or press − = to zoom, swipe to move.")
-                .font(.system(size: 11))
-                .foregroundStyle(Theme.inkMuted)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Button("Split Here", systemImage: "scissors") { edit.split(lane) }
-                .disabled(!edit.canSplit(lane))
-                .help("Split at the playhead. Hold Option to split exactly there.")
-                .fixedSize()
-        }
-        .controlSize(.small)
     }
 }
 
@@ -806,9 +702,6 @@ private struct TrimOverlay: View {
     let lane: EditModel.Lane
     let windowStart: Double
     let windowSpan: Double
-    var showsHandles = true
-
-    private static let handleColor = Color(red: 0.659, green: 0.196, blue: 0.102)
 
     var body: some View {
         let edit = model.editModel
@@ -831,7 +724,7 @@ private struct TrimOverlay: View {
                     .frame(width: max(0, width - keptTo), height: height)
                     .offset(x: keptTo)
                     .allowsHitTesting(false)
-                if showsHandles && !edit.isOnSite {
+                if !edit.isOnSite {
                     let startX = x(cutStart), endX = x(lane.spanLength - cutEnd)
                     if startX >= -1 && startX <= width + 1 {
                         handle(height: height, pointingRight: true)
@@ -879,7 +772,7 @@ private struct TrimOverlay: View {
     private func handle(height: CGFloat, pointingRight: Bool) -> some View {
         ZStack(alignment: pointingRight ? .topLeading : .topTrailing) {
             Rectangle()
-                .fill(Self.handleColor)
+                .fill(Theme.needle)
                 .frame(width: 2, height: height)
                 .frame(maxWidth: .infinity)
             UnevenRoundedRectangle(
@@ -888,7 +781,7 @@ private struct TrimOverlay: View {
                 bottomTrailingRadius: pointingRight ? 3 : 0,
                 topTrailingRadius: 0
             )
-            .fill(Self.handleColor)
+            .fill(Theme.needle)
             .frame(width: 7, height: 12)
             .offset(x: pointingRight ? Self.grip / 2 : -Self.grip / 2)
         }
@@ -908,23 +801,290 @@ private struct TrimOverlay: View {
     static let space = "trim"
 }
 
-private struct EditHints: View {
+/// The selected track's settings and what can be done with it.
+private struct Inspector: View {
+    @Environment(AppModel.self) private var model
+
+    let size: LayoutSize
+    /// Asks to append one track to another, which is confirmed first.
+    let append: (EditModel.Lane, EditModel.Lane) -> Void
+
+    private var edit: EditModel { model.editModel }
+
     var body: some View {
-        HStack(spacing: 10) {
-            ForEach([("Space", "Play"), ("← →", "Skip 5 s"), ("M", "Split at playhead"), ("⌥", "Split exactly"), ("⇤ ⇥", "Drag edges to trim"), ("- =", "Zoom"), ("esc", "Close up")], id: \.0) { key, label in
-                HStack(spacing: 4) {
-                    Text(key)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(Theme.ink)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(Theme.card, in: .rect(cornerRadius: 3))
-                    Text(label)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.inkMuted)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                if let lane = edit.expandedLane {
+                    heading(lane)
+                    TrackSettings(lane: lane)
+                        .disabled(edit.isOnSite)
+                    SettingsNote(locked: edit.isOnSite)
+                        .padding(.top, 10)
+                    rule
+                    TrackActions(lane: lane, size: size, append: append)
+                        .disabled(edit.isOnSite)
+                        // A question about one track isn't left open over another.
+                        .id(lane.id)
+                    rule
+                    Text("Drag between tracks to reorder. Drop onto a track to append its audio.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.muted)
+                } else {
+                    Text("Select a track")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.muted)
+                    SettingsNote(locked: edit.isOnSite)
+                        .padding(.top, 14)
                 }
-                .fixedSize()
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 14)
+        }
+        .padding(.leading, size == .regular ? 24 : 14)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(Theme.line)
+                .frame(width: 1)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var rule: some View {
+        HairlineRule()
+            .padding(.vertical, 16)
+    }
+
+    private func heading(_ lane: EditModel.Lane) -> some View {
+        let place = lane.isAppended ? "Piece \(lane.label)" : "Track \(trackNumberText(lane.number))"
+        return VStack(alignment: .leading, spacing: 6) {
+            CapLabel(lane.side.map { "\(place) / Side \($0)" } ?? place)
+            Text(displayName(lane))
+                .font(Theme.serif(size.sectionTitle))
+                .foregroundStyle(Theme.ink)
+                .lineLimit(2)
+                .help(displayName(lane))
+                .accessibilityAddTraits(.isHeader)
+        }
+        .padding(.bottom, 6)
+    }
+}
+
+/// Level, speed and direction, and where the trims are.
+private struct TrackSettings: View {
+    @Environment(AppModel.self) private var model
+
+    let lane: EditModel.Lane
+
+    private var edit: EditModel { model.editModel }
+    private var settings: TrackAdjustments { edit.adjustments(for: lane) }
+
+    var body: some View {
+        // Trim points are given as they're heard, like the close-up's ruler.
+        let cuts = edit.heardCuts(lane)
+        VStack(alignment: .leading, spacing: 0) {
+            level
+            speed
+            direction
+            KeyValueRow(key: "Trim start", value: TimeText.hundredths(cuts.start / settings.speed))
+            KeyValueRow(key: "Trim end", value: TimeText.hundredths((lane.spanLength - cuts.end) / settings.speed))
+        }
+    }
+
+    @ViewBuilder private var level: some View {
+        KeyValueRow(key: "Level", value: Self.decibels(settings.gainDB))
+        HStack(spacing: 8) {
+            Slider(
+                value: Binding(
+                    get: { settings.gainDB },
+                    // Half-decibel steps, rounded here so the slider shows no tick marks.
+                    set: { edit.set(TrackAdjustments(gainDB: ($0 * 2).rounded() / 2, speed: settings.speed, reversed: settings.reversed), for: lane) }
+                ),
+                in: -18...18
+            )
+            .frame(minWidth: 80, maxWidth: .infinity)
+            .accessibilityLabel("Level of \(lane.label)")
+            .accessibilityValue(Self.decibels(settings.gainDB))
+            Button(edit.measuring.contains(lane.id) ? "Measuring…" : "Fit") { edit.fitLevel(lane) }
+                .buttonStyle(.paperSmall)
+                .disabled(edit.measuring.contains(lane.id))
+                .help("Raise or lower the level so the loudest moment sits just under the top")
+        }
+        .padding(.vertical, 6)
+        if let peak = edit.loudestPeak(of: lane), peak.decibels + settings.gainDB > -0.1, settings.gainDB > 0 {
+            Label(
+                peak.exact
+                    ? "The loudest moment will clip at this level. Try Fit."
+                    : "The loudest moment may clip at this level. Fit measures it exactly.",
+                systemImage: "exclamationmark.triangle"
+            )
+            .font(.system(size: 11))
+            .foregroundStyle(Theme.attention)
+            .padding(.bottom, 6)
+        }
+    }
+
+    private var speed: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text("Speed")
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize()
+                Spacer(minLength: 0)
+                Button("−") { setSpeed(settings.speed - 0.01) }
+                    .help("1% slower")
+                    .accessibilityLabel("Slower")
+                Text(Self.percent(settings.speed))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.ink)
+                    .frame(minWidth: 46)
+                    .fixedSize()
+                    .accessibilityLabel("Speed \(Self.percent(settings.speed))")
+                Button("+") { setSpeed(settings.speed + 0.01) }
+                    .help("1% faster")
+                    .accessibilityLabel("Faster")
+            }
+            .buttonStyle(.paperSmall)
+            Picker("Speed preset", selection: Binding(
+                get: { [0.5, 1, 2].first { abs($0 - settings.speed) < 0.0005 } ?? 0 },
+                set: { if $0 > 0 { setSpeed($0) } }
+            )) {
+                Text("½×").tag(0.5)
+                Text("1×").tag(1.0)
+                Text("2×").tag(2.0)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .help("½× plays a tape recorded at half the speed it was captured at, 2× the reverse")
+            HairlineRule()
+        }
+        .font(.system(size: 13))
+        .padding(.top, 8)
+    }
+
+    private var direction: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Text("Direction")
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize()
+                Spacer(minLength: 0)
+                Menu(settings.reversed ? "Reversed" : "Forward") {
+                    Picker("Direction", selection: Binding(
+                        get: { settings.reversed },
+                        set: { edit.set(TrackAdjustments(gainDB: settings.gainDB, speed: settings.speed, reversed: $0), for: lane) }
+                    )) {
+                        Text("Forward").tag(false)
+                        Text("Reversed").tag(true)
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Reversed plays this track backwards")
+                .accessibilityLabel("Direction: \(settings.reversed ? "Reversed" : "Forward")")
+            }
+            .font(.system(size: 13))
+            .padding(.vertical, 8)
+            HairlineRule()
+        }
+    }
+
+    private func setSpeed(_ speed: Double) {
+        edit.set(TrackAdjustments(gainDB: settings.gainDB, speed: speed, reversed: settings.reversed), for: lane)
+    }
+
+    private static func decibels(_ value: Double) -> String {
+        value == 0 ? "0 dB" : String(format: "%+.1f dB", value)
+    }
+
+    private static func percent(_ speed: Double) -> String {
+        let value = speed * 100
+        return value.rounded() == value ? "\(Int(value))%" : String(format: "%.1f%%", value)
+    }
+}
+
+/// Joining, appending, detaching, moving and resetting.
+private struct TrackActions: View {
+    @Environment(AppModel.self) private var model
+    @State private var confirmsJoin = false
+
+    let lane: EditModel.Lane
+    let size: LayoutSize
+    let append: (EditModel.Lane, EditModel.Lane) -> Void
+
+    private var edit: EditModel { model.editModel }
+
+    var body: some View {
+        let targets = edit.appendTargets(for: lane)
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Track actions")
+                .font(Theme.serif(size.sectionTitle))
+                .foregroundStyle(Theme.ink)
+                .accessibilityAddTraits(.isHeader)
+
+            Button("Join with previous…") { edit.endTyping(); confirmsJoin = true }
+                .disabled(!edit.canJoin(lane))
+
+            Menu("Append to another track…") {
+                ForEach(targets) { target in
+                    Button("\(trackNumberText(target.number))  \(displayName(target))") {
+                        append(lane, target)
+                    }
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .disabled(targets.isEmpty)
+            .help("Play this track straight after another, as one track on the site")
+
+            if lane.isAppended {
+                Button("Detach into its own track") { edit.detach(lane) }
+            }
+
+            HStack(spacing: 8) {
+                Button("Move up") { edit.move(lane, by: -1) }
+                    .disabled(!edit.canMove(lane, by: -1))
+                Text("/")
+                    .foregroundStyle(Theme.muted)
+                    .accessibilityHidden(true)
+                Button("Move down") { edit.move(lane, by: 1) }
+                    .disabled(!edit.canMove(lane, by: 1))
+            }
+
+            Button("Reset trim") { edit.resetTrim(lane) }
+                .disabled(!lane.track.isCut)
+            Button("Reset level, speed and direction") { edit.set(.none, for: lane) }
+                .disabled(edit.adjustments(for: lane).isNeutral)
+        }
+        .buttonStyle(ActionLineStyle())
+        .font(.system(size: 13))
+        .confirmationDialog("Join \(lane.label) onto the track before it?", isPresented: $confirmsJoin) {
+            Button("Join Tracks", role: .destructive) { edit.joinWithPrevious(lane) }
+        } message: {
+            Text("\(lane.label)’s name, description and settings are removed. It takes on the settings of the track before it.")
+        }
+    }
+}
+
+/// An action written as a line of text.
+private struct ActionLineStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Face(configuration: configuration)
+    }
+
+    /// A view of its own, so it can read whether the button is enabled.
+    private struct Face: View {
+        @Environment(\.isEnabled) private var isEnabled
+
+        let configuration: Configuration
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(Theme.ink)
+                .contentShape(.rect)
+                .opacity(!isEnabled ? 0.4 : configuration.isPressed ? 0.6 : 1)
         }
     }
 }

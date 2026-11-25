@@ -478,7 +478,7 @@ private struct MarkerFlag: View {
 }
 
 /// `02`, as tracks and their markers are numbered.
-private func trackNumberText(_ number: Int) -> String {
+func trackNumberText(_ number: Int) -> String {
     String(format: "%02d", number)
 }
 
@@ -575,7 +575,7 @@ private struct TransportRow: View {
 }
 
 /// The key that does what a button does.
-private struct KeyLetter: View {
+struct KeyLetter: View {
     let key: String
 
     init(_ key: String) { self.key = key }

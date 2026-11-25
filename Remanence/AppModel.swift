@@ -108,10 +108,17 @@ final class AppModel {
                 "M Add marker",
             ]
         }
+        if route == .edit {
+            return ["Edits apply to playback and site copies · Master preserved"]
+        }
         return [footerNote ?? pipelineSummary]
     }
     /// More than the footer has room for, shown when the pointer rests on its note.
     var footerHelp: String? {
+        if route == .edit {
+            return "Space Play / pause · ← → Skip 5 s · M Split at playhead · ⌥ Split exactly · - = Zoom"
+                + " · Esc Close the close-up · Drag a waveform’s edges to trim"
+        }
         guard route == .review else { return nil }
         return "Space Play / pause · M Add marker · H Hear the join · ← → Nudge · , . Previous or next marker"
             + " · J K L Shuttle · - = Zoom · I O Trim the side · ⌘Z Undo"

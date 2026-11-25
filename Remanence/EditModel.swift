@@ -51,7 +51,7 @@ final class EditModel {
     @ObservationIgnored private var scrubbingLaneID: String?
     @ObservationIgnored private var resumeAfterScrub = false
 
-    /// The track opened up for a close look, if any, and the stretch of it in view.
+    /// The selected track, shown up close, if any, and the stretch of it in view.
     /// The view is measured in master seconds from the track's start in listening
     /// order, so a reversed track zooms the way it sounds.
     private(set) var expandedLaneID: String?
@@ -137,6 +137,11 @@ final class EditModel {
         lane.head.flatMap { head in lanes.first { $0.id == head } } ?? lane
     }
 
+    /// The tracks a track can be appended to the end of, for choosing from a menu.
+    func appendTargets(for lane: Lane) -> [Lane] {
+        headLanes.filter { canAppend(lane, to: $0) }
+    }
+
     /// Whether one track can be dropped onto another to play after it.
     func canAppend(_ moving: Lane, to target: Lane) -> Bool {
         guard !isOnSite, moving.id != target.id else { return false }
@@ -174,7 +179,6 @@ final class EditModel {
     }
 
     var isOnSite: Bool { tape?.pushedAt != nil }
-    var hasSides: Bool { Set(lanes.map(\.side)).count > 1 }
 
     func observe(tapeID: Int64) async {
         isOnScreen = true
@@ -182,6 +186,8 @@ final class EditModel {
         lanes = []
         measuredPeaks = [:]
         guard let library = app.library else { return }
+        // A track is picked once, when they first arrive. Closing it afterward sticks.
+        var needsSelection = true
         do {
             for try await post in library.postUpdates(tapeID: tapeID) {
                 guard let post else { continue }
@@ -225,6 +231,12 @@ final class EditModel {
                 if let restore = pendingRestore, !lanes.isEmpty {
                     pendingRestore = nil
                     if restore.tapeID == tapeID { apply(restore) }
+                }
+                if needsSelection, let first = lanes.first {
+                    needsSelection = false
+                    if expandedLane == nil {
+                        toggleExpanded(lanes.first { $0.id == player.trackKey } ?? first)
+                    }
                 }
                 // A split or a join changes the opened track's length, so the view refits.
                 if let id = expandedLaneID {
@@ -315,8 +327,8 @@ final class EditModel {
     var expandedLane: Lane? { lanes.first { $0.id == expandedLaneID } }
 
     /// Takes the cursor out of a name field, so keys like M and Space reach edit
-    /// mode. Opening a track rebuilds its card, and AppKit then hands the cursor to
-    /// the first text field it finds, so this also runs once that settles.
+    /// mode. AppKit can hand the cursor to a text field as the screen changes, so
+    /// this also runs once that settles.
     func endTyping() {
         NSApp.keyWindow?.makeFirstResponder(nil)
         DispatchQueue.main.async { NSApp.keyWindow?.makeFirstResponder(nil) }
