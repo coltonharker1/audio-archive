@@ -1,14 +1,16 @@
 import RemanenceCore
 import SwiftUI
 
-/// Follows along with a recording, line by line.
+/// Follows along with a recording, line by line, with what's known about the tape
+/// beside it.
 struct ReadAlongView: View {
     @Environment(AppModel.self) private var model
     @State private var readAlong: ReadAlong?
     @State private var isFollowing = true
-    @State private var showsDetails = true
 
     let tape: ShelfTape
+    @Binding var showsDetails: Bool
+    let size: LayoutSize
 
     private var item: ShelfTape.Item? { model.selectedItem }
     private var sourceID: Int64? { item?.source.id }
@@ -19,27 +21,23 @@ struct ReadAlongView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if tape.tape.pushedAt == nil {
-                approval
-                    .padding(.horizontal, 32)
-                    .padding(.top, 12)
+        HStack(alignment: .top, spacing: size == .regular ? 28 : 16) {
+            VStack(alignment: .leading, spacing: 0) {
+                transcript
+                HairlineRule()
+                TransportBar()
+                    .padding(.vertical, 10)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
-            TransportBar()
-                .padding(.horizontal, 32)
-                .padding(.vertical, 12)
-
-            Rectangle().fill(Theme.line).frame(height: 1)
-
-            transcript
+            if showsDetails {
+                ReadAlongDetails(tape: tape, readAlong: readAlong, size: size)
+                    .frame(width: size.rightColumn)
+            }
         }
+        .padding(.horizontal, 28)
         .background(Theme.paper)
         .task(id: sourceID) { await observe() }
-        .inspector(isPresented: $showsDetails) {
-            ReadAlongDetails(tape: tape, readAlong: readAlong)
-            .inspectorColumnWidth(min: 260, ideal: 300, max: 380)
-        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -79,17 +77,6 @@ struct ReadAlongView: View {
         }
     }
 
-    private var approval: some View {
-        let approved = tape.tape.approvedAt != nil
-        return HStack {
-            Spacer(minLength: 0)
-            Button(approved ? "Approved" : "Looks Good", systemImage: approved ? "checkmark" : "hand.thumbsup") {
-                Task { await model.setApproved(tape, !approved) }
-            }
-            .fixedSize()
-        }
-    }
-
     @ViewBuilder private var transcript: some View {
         if readAlong == nil {
             Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -103,10 +90,11 @@ struct ReadAlongView: View {
     private var emptyState: some View {
         VStack(spacing: 8) {
             Text(emptyTitle)
-                .font(Theme.display(26))
+                .font(Theme.serif(size.sectionTitle))
                 .foregroundStyle(Theme.ink)
             Text(emptyDetail)
-                .foregroundStyle(Theme.inkMuted)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.muted)
                 .multilineTextAlignment(.center)
         }
         .padding(32)
@@ -126,11 +114,12 @@ struct ReadAlongView: View {
     private var lines: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(segments.enumerated()), id: \.element.id) { index, segment in
                         LineRow(
                             segment: segment,
                             position: position(of: index),
+                            size: size,
                             isEditing: model.editingLineID == segment.id,
                             onSeek: {
                                 isFollowing = true
@@ -149,8 +138,7 @@ struct ReadAlongView: View {
                         .id(segment.id)
                     }
                 }
-                .padding(.horizontal, 32)
-                .padding(.vertical, 24)
+                .padding(.vertical, 12)
                 .frame(maxWidth: 780, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -167,10 +155,10 @@ struct ReadAlongView: View {
             .onAppear { scroll(to: currentIndex, proxy: proxy, animated: false) }
             .overlay(alignment: .bottom) {
                 if !isFollowing && model.player.isPlaying {
-                    Button("Follow Along", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                    Button("Follow along", systemImage: "text.line.first.and.arrowtriangle.forward") {
                         isFollowing = true
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.paperPrimary)
                     .padding(.bottom, 16)
                 }
             }
@@ -201,30 +189,37 @@ private struct LineRow: View {
 
     let segment: Segment
     let position: Position
+    let size: LayoutSize
     let isEditing: Bool
     let onSeek: () -> Void
     let onEdit: () -> Void
     let onFinishEditing: (String?) -> Void
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovering = false
     @State private var draft = ""
     @State private var selection: TextSelection?
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 14) {
-            Text(TimeLabel.clock(segment.startTime))
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(Theme.inkMuted)
-                .frame(width: 52, alignment: .trailing)
+        VStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: size == .regular ? 14 : 10) {
+                Text(TimeLabel.clock(segment.startTime))
+                    .font(Theme.mono(11))
+                    .foregroundStyle(Theme.muted)
+                    .lineLimit(1)
+                    .frame(width: 52, alignment: .trailing)
 
-            if isEditing {
-                editor
-            } else {
-                line
+                if isEditing {
+                    editor
+                } else {
+                    line
+                }
             }
+            .padding(.horizontal, size == .regular ? 10 : 7)
+            .padding(.vertical, size == .regular ? 12 : 9)
+            HairlineRule()
         }
+        .background(position == .current || isEditing ? Theme.picked : .clear)
         .contentShape(.rect)
         .onHover { isHovering = $0 }
     }
@@ -233,31 +228,39 @@ private struct LineRow: View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Button(action: onSeek) {
                 Text(segment.text)
-                    .font(Theme.serif(20))
+                    // The current line is marked by its background, not a larger
+                    // font, so following along over a long sermon stays calm.
+                    .font(Theme.serif(size.rowName))
                     .foregroundStyle(textColor)
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    // Scaling rather than a larger font keeps the lines from moving,
-                    // so following along over a long sermon stays calm.
-                    .scaleEffect(position == .current && !reduceMotion ? 1.05 : 1, anchor: .leading)
-                    .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: position)
-                    .padding(.trailing, 20)
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
             .accessibilityHint("Plays from here")
             .accessibilityAddTraits(position == .current ? .isSelected : [])
             .contextMenu {
-                Button("Edit Line", action: onEdit)
+                Button("Edit line", action: onEdit)
             }
 
-            Button("Edit", systemImage: "pencil", action: onEdit)
+            editButton
+                .opacity(isHovering || position == .current ? 1 : 0)
+                .help("Edit line")
+                .accessibilityLabel("Edit this line")
+        }
+    }
+
+    /// Words where there's room for them, and a pencil where there isn't.
+    @ViewBuilder private var editButton: some View {
+        if size == .regular {
+            Button("Edit line", action: onEdit)
+                .buttonStyle(.paperSmall)
+        } else {
+            Button("Edit line", systemImage: "pencil", action: onEdit)
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
                 .tint(Theme.accent)
-                .opacity(isHovering || position == .current ? 1 : 0)
-                .accessibilityLabel("Edit this line")
         }
     }
 
@@ -273,10 +276,10 @@ private struct LineRow: View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("Line", text: $draft, selection: $selection, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(Theme.serif(20))
+                .font(Theme.serif(size.rowName))
                 .foregroundStyle(Theme.ink)
                 .padding(8)
-                .background(Theme.card, in: .rect(cornerRadius: 6))
+                .background(Theme.field, in: .rect(cornerRadius: 6))
                 .overlay {
                     RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.accent, lineWidth: 1)
                 }
@@ -289,7 +292,7 @@ private struct LineRow: View {
                     .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 Button("Cancel") { onFinishEditing(nil) }
             }
-            .controlSize(.small)
+            .buttonStyle(.paperSmall)
         }
         .onAppear {
             draft = segment.text
@@ -300,7 +303,7 @@ private struct LineRow: View {
     }
 }
 
-/// The side panel: what's known about the tape, and ways to improve it.
+/// The right column: approval, what's known about the tape, and ways to improve it.
 private struct ReadAlongDetails: View {
     @Environment(AppModel.self) private var model
     @State private var context = ""
@@ -308,13 +311,19 @@ private struct ReadAlongDetails: View {
 
     let tape: ShelfTape
     let readAlong: ReadAlong?
+    let size: LayoutSize
 
     private var details: SummaryDetails? { readAlong?.track?.summaryDetails }
     private var hasSummary: Bool { readAlong?.track?.summary != nil }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 20) {
+                // Here until Site Post can take approval back.
+                if tape.tape.pushedAt == nil {
+                    approval
+                }
+
                 if let text = tape.tape.description ?? details?.summaryLong {
                     section("About") {
                         Text(text)
@@ -329,44 +338,64 @@ private struct ReadAlongDetails: View {
                     section("Mentioned") {
                         FlowLayout(spacing: 6) {
                             ForEach(mentioned, id: \.self) { name in
-                                Button(name) { model.search(for: name) }
-                                    .buttonStyle(.plain)
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(Theme.ink)
-                                    .padding(.horizontal, 9)
-                                    .padding(.vertical, 4)
-                                    .overlay {
-                                        Capsule().strokeBorder(Theme.inkMuted.opacity(0.5))
-                                    }
-                                    .help("Search every tape for \(name)")
+                                Button {
+                                    model.search(for: name)
+                                } label: {
+                                    Text(name)
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(Theme.ink)
+                                        .lineLimit(1)
+                                        .padding(.horizontal, 9)
+                                        .padding(.vertical, 4)
+                                        .overlay {
+                                            Capsule().strokeBorder(Theme.buttonBorder)
+                                        }
+                                        .contentShape(.capsule)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Search every tape for \(name)")
                             }
                         }
                     }
                 }
 
-                section("What do you know about this tape?") {
+                section("Tape notes") {
                     TextEditor(text: $context)
                         .font(.system(size: 13))
+                        .foregroundStyle(Theme.ink)
                         .scrollContentBackground(.hidden)
                         .padding(6)
-                        .frame(minHeight: 84)
-                        .background(Theme.card, in: .rect(cornerRadius: 8))
+                        // A fixed height, since a column that scrolls offers no height.
+                        .frame(height: 96)
+                        .background(Theme.field, in: .rect(cornerRadius: 5))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 5)
+                                .strokeBorder(Theme.fieldBorder)
+                                .allowsHitTesting(false)
+                        }
                         .focused($isContextFocused)
                         .accessibilityLabel("Notes about this tape")
-                    Text("Where it came from, who’s speaking, anything a summary should know.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.inkMuted)
+                    hint("Where it came from, who’s speaking, anything a summary should know.")
                     summaryButton
                 }
+
+                HairlineRule()
 
                 section("Transcript") {
                     betterTranscript
                 }
             }
-            .padding(20)
+            .padding(.vertical, 14)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Theme.paper.opacity(0.6))
+        .padding(.leading, size == .regular ? 24 : 14)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(Theme.line)
+                .frame(width: 1)
+                .accessibilityHidden(true)
+        }
         .onAppear { context = tape.tape.context ?? "" }
         .onChange(of: tape.id) { _, _ in context = tape.tape.context ?? "" }
         .onChange(of: isContextFocused) { _, focused in
@@ -375,23 +404,29 @@ private struct ReadAlongDetails: View {
         .onDisappear { saveContext() }
     }
 
+    private var approval: some View {
+        let approved = tape.tape.approvedAt != nil
+        return Button(approved ? "Approved" : "Looks Good", systemImage: approved ? "checkmark" : "hand.thumbsup") {
+            Task { await model.setApproved(tape, !approved) }
+        }
+        .buttonStyle(.paperStandard)
+    }
+
     private func saveContext() {
         guard context != (tape.tape.context ?? "") else { return }
         Task { await model.setContext(tape, context) }
     }
 
     private var summaryButton: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             Button(hasSummary ? "Rewrite Summary" : "Write a Summary") {
                 saveContext()
                 Task { await model.requestSummary(tape) }
             }
+            .buttonStyle(.paperStandard)
             .disabled(tape.status.isActive || readAlong?.transcriptModel == nil)
 
-            Text("Summaries are reference for what you write in Site Post. They’re never published by themselves.")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.inkMuted)
-                .lineLimit(2)
+            hint("Summaries are reference for what you write in Site Post. They’re never published by themselves.")
         }
     }
 
@@ -402,35 +437,38 @@ private struct ReadAlongDetails: View {
 
             if readAlong.isComparing {
                 Label("Listening with the \(other) model…", systemImage: "waveform")
-                    .font(.callout)
+                    .font(.system(size: 12))
                     .foregroundStyle(Theme.accent)
             } else if readAlong.candidate != nil {
-                Button("Compare Results") { model.isComparingTranscripts = true }
-                    .buttonStyle(.borderedProminent)
-                Text("The new transcript is ready. Nothing changes until you choose.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.inkMuted)
+                Button("Compare transcripts…") { model.isComparingTranscripts = true }
+                    .buttonStyle(.paperPrimary)
+                hint("The new transcript is ready. Nothing changes until you choose.")
             } else {
                 Button("Try a Better Transcript") {
                     if let id = model.selectedItem?.source.id {
                         Task { await model.requestComparison(sourceID: id, model: other) }
                     }
                 }
+                .buttonStyle(.paperStandard)
                 .disabled(!canCompare)
-                Text("Listens again with the \(other) model. You’ll compare them before anything changes.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.inkMuted)
+                hint("Listens again with the \(other) model. You’ll compare them before anything changes.")
             }
         }
     }
 
+    private func hint(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundStyle(Theme.muted)
+    }
+
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Theme.inkMuted)
+            CapLabel(title)
+                .accessibilityAddTraits(.isHeader)
             content()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -446,8 +484,18 @@ private struct FlowLayout: Layout {
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         let positions = place(subviews, width: bounds.width)
         for (subview, point) in zip(subviews, positions.points) {
-            subview.place(at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y), proposal: .unspecified)
+            subview.place(
+                at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y),
+                proposal: fitting(subview, in: bounds.width)
+            )
         }
+    }
+
+    /// An item's own size, unless that's wider than a whole row.
+    private func fitting(_ subview: LayoutSubview, in width: CGFloat) -> ProposedViewSize {
+        subview.sizeThatFits(.unspecified).width > width
+            ? ProposedViewSize(width: width, height: nil)
+            : .unspecified
     }
 
     private func place(_ subviews: Subviews, width: CGFloat) -> (points: [CGPoint], width: CGFloat, height: CGFloat) {
@@ -457,7 +505,7 @@ private struct FlowLayout: Layout {
         var rowHeight: CGFloat = 0
         var widest: CGFloat = 0
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            let size = subview.sizeThatFits(fitting(subview, in: width))
             if x > 0, x + size.width > width {
                 x = 0
                 y += rowHeight + spacing

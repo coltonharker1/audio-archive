@@ -9,6 +9,8 @@ struct TapeWorkspaceView: View {
     @State private var showsReviewTracks = true
     /// Whether Edit's track settings are showing.
     @State private var showsEditInspector = true
+    /// Whether Read Along's details are showing.
+    @State private var showsReadAlongDetails = true
 
     let tape: ShelfTape
 
@@ -39,7 +41,7 @@ struct TapeWorkspaceView: View {
         switch model.route {
         case .review: ReviewView(showsTracks: $showsReviewTracks, size: size)
         case .edit: EditView(tape: tape, showsInspector: $showsEditInspector, size: size)
-        case .readAlong: ReadAlongView(tape: tape)
+        case .readAlong: ReadAlongView(tape: tape, showsDetails: $showsReadAlongDetails, size: size)
         case .post: SitePostView(tape: tape)
         case .shelf, .search, .record, .catalog, .sitePosts, .setup: EmptyView()
         }

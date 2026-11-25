@@ -11,10 +11,10 @@ struct TransportBar: View {
                 model.togglePlayback()
             } label: {
                 Image(systemName: model.player.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 16))
+                    .font(.system(size: 13))
                     .foregroundStyle(Theme.paper)
-                    .frame(width: 44, height: 44)
-                    .background(Theme.ink, in: .circle)
+                    .frame(width: 34, height: 34)
+                    .background(Theme.primary, in: .circle)
                     .contentShape(.circle)
             }
             .buttonStyle(.plain)
@@ -25,10 +25,14 @@ struct TransportBar: View {
                 Text(failure)
                     .font(.callout)
                     .foregroundStyle(Theme.attention)
+                    .lineLimit(2)
+                    .help(failure)
+                Spacer(minLength: 0)
             } else {
                 Text(TimeLabel.clock(model.player.currentTime))
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(Theme.mono())
                     .foregroundStyle(Theme.ink)
+                    .fixedSize()
                     .frame(minWidth: 48, alignment: .trailing)
 
                 Slider(
@@ -48,8 +52,9 @@ struct TransportBar: View {
                 .accessibilityValue(TimeLabel.clock(model.player.currentTime))
 
                 Text(TimeLabel.clock(model.player.duration))
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(Theme.inkMuted)
+                    .font(Theme.mono())
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize()
                     .frame(minWidth: 48, alignment: .leading)
             }
         }
