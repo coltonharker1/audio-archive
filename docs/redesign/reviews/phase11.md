@@ -1,0 +1,4 @@
+1. [blocking] `Remanence/SitePostView.swift:416` — The track subtitle is `ShelfTape.Item.name`, which is the opening track’s name or the tape title, so a row reads "Let it ring · 0:00" under the title "Let it ring". Mock 07 and Review’s rows use the side: `source.side` as "Side A · 0:00", and the recording name only when the side is nil (`Remanence/ReviewView.swift:831`).
+2. [minor] `Remanence/SitePostView.swift:604` — Publish and Unpublish call `saveNow()` and then `push.setPublished` immediately. Create and Update go through `afterSaving` (line 615), which waits so the write lands before the post is read. `setPublished` is a short request and then increments `refreshes`, and `reloadDrafts` fills the fields only while they are nil (`observe`, line 181). If that reload wins, the form shows the old text and a later edit of another field writes that stale `PostFields` back over the description.
+
+VERDICT: CHANGES

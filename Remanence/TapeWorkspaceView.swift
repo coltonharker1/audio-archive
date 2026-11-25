@@ -11,6 +11,8 @@ struct TapeWorkspaceView: View {
     @State private var showsEditInspector = true
     /// Whether Read Along's details are showing.
     @State private var showsReadAlongDetails = true
+    /// Whether Site Post's status column is showing.
+    @State private var showsSiteStatus = true
 
     let tape: ShelfTape
 
@@ -42,7 +44,7 @@ struct TapeWorkspaceView: View {
         case .review: ReviewView(showsTracks: $showsReviewTracks, size: size)
         case .edit: EditView(tape: tape, showsInspector: $showsEditInspector, size: size)
         case .readAlong: ReadAlongView(tape: tape, showsDetails: $showsReadAlongDetails, size: size)
-        case .post: SitePostView(tape: tape)
+        case .post: SitePostView(tape: tape, showsStatus: $showsSiteStatus, size: size)
         case .shelf, .search, .record, .catalog, .sitePosts, .setup: EmptyView()
         }
     }

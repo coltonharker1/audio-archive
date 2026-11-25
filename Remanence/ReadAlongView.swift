@@ -303,7 +303,7 @@ private struct LineRow: View {
     }
 }
 
-/// The right column: approval, what's known about the tape, and ways to improve it.
+/// The right column: what's known about the tape, and ways to improve it.
 private struct ReadAlongDetails: View {
     @Environment(AppModel.self) private var model
     @State private var context = ""
@@ -319,11 +319,6 @@ private struct ReadAlongDetails: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                // Here until Site Post can take approval back.
-                if tape.tape.pushedAt == nil {
-                    approval
-                }
-
                 if let text = tape.tape.description ?? details?.summaryLong {
                     section("About") {
                         Text(text)
@@ -402,14 +397,6 @@ private struct ReadAlongDetails: View {
             if !focused { saveContext() }
         }
         .onDisappear { saveContext() }
-    }
-
-    private var approval: some View {
-        let approved = tape.tape.approvedAt != nil
-        return Button(approved ? "Approved" : "Looks Good", systemImage: approved ? "checkmark" : "hand.thumbsup") {
-            Task { await model.setApproved(tape, !approved) }
-        }
-        .buttonStyle(.paperStandard)
     }
 
     private func saveContext() {

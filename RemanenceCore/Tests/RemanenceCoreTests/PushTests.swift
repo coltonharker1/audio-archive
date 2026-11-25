@@ -371,6 +371,19 @@ private let hasTools = FileManager.default.fileExists(atPath: KnownTools.ffmpeg.
         #expect(FileManager.default.fileExists(atPath: library.pushFolder(tapeUUID: stored!.uuid).path) == false)
     }
 
+    @Test(.enabled(if: hasTools)) func aFirstPushArrivesUnpublished() async throws {
+        let tape = try await addTape()
+        let site = FakeSite()
+
+        try await pusher(site).push(tapeID: tape.tapeID)
+
+        let stored = try #require(try await fetchTape(tape.tapeID))
+        let entry = try #require(await site.entry(for: stored.uuid))
+        #expect(entry.published == false)
+        #expect(await site.updates.isEmpty, "nothing followed the push to publish it")
+        #expect(SiteSnapshot.decode(stored.siteSnapshot)?.published == false)
+    }
+
     @Test(.enabled(if: hasTools)) func pushingTheSameTapeTwiceUploadsNothingNew() async throws {
         let tape = try await addTape()
         let site = FakeSite()

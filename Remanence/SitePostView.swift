@@ -4,10 +4,13 @@ import RemanenceCore
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Everything the site will show for a tape, written here and then pushed.
+/// Everything the site will show for a tape: the writing on the left, and where the
+/// post stands on the site, with its next step, on the right.
 struct SitePostView: View {
     @Environment(AppModel.self) private var model
     let tape: ShelfTape
+    @Binding var showsStatus: Bool
+    let size: LayoutSize
 
     @State private var post: SitePost?
     @State private var fields: PostFields?
@@ -23,44 +26,122 @@ struct SitePostView: View {
     @State private var savedCaptions: [Int64: String] = [:]
     @State private var saveTask: Task<Void, Never>?
     @State private var isDropTargeted = false
+    @State private var isManagingPhotos = false
+    @State private var isEditingFinding = false
+    /// The track whose name and description are showing.
+    @State private var openTrackID: String?
+    @State private var key = ""
+    /// The approval the push plan was last worked out for, so a problem found before
+    /// approving isn't shown after it.
+    @State private var plannedApproval: Date?
 
     @State private var confirmingRefresh = false
     @State private var confirmingDelete = false
 
     private var push: PushModel { model.pushModel }
     private var isOnSite: Bool { tape.tape.pushedAt != nil }
-    /// A post on the site that the app hasn't read yet can't be edited, or a later
-    /// update would be worked out against nothing.
-    private var needsRefresh: Bool { isOnSite && post?.tape.siteSnapshot == nil }
     private var changes: SiteChanges? { post.flatMap(Pusher.changes(for:)) }
+    private var needsRefresh: Bool { status.facts.needsRefresh }
+    /// Nothing here can be edited while the post needs a refresh or is being synced.
+    private var isLocked: Bool { needsRefresh || push.syncingTapeID == tape.id }
+
+    private var status: SiteStatus {
+        SiteStatus(SiteFacts(
+            isOnSite: isOnSite,
+            sitePublished: SiteSnapshot.decode(post?.tape.siteSnapshot)?.published,
+            isApproved: tape.tape.approvedAt != nil,
+            hasKey: push.hasKey,
+            hasChanges: changes?.isEmpty == false,
+            blockedReason: blockedReason,
+            isPushing: push.pushingTapeID == tape.id,
+            pushFailed: push.failure != nil
+        ))
+    }
+
+    private var blockedReason: String? {
+        if isOnSite { return push.isPushing ? "" : nil }
+        if push.isPushing { return "Another tape is being pushed." }
+        if model.recordModel.isRecording { return "Finish recording first." }
+        if tape.status.isActive { return "This tape is still being processed." }
+        if push.planProblem != nil { return "" }
+        if fields?.medium == nil { return "Choose a medium first." }
+        return nil
+    }
+
+    private var planProblem: String? {
+        plannedApproval == tape.tape.approvedAt ? push.planProblem : nil
+    }
+
+    /// A push that failed, or a key that couldn't be kept.
+    private var pushFailure: String? {
+        push.pushingTapeID == nil ? push.failure : nil
+    }
+
+    /// Why the last thing sent about this post didn't work, such as the site's copy
+    /// being newer than the one here. It stays until the next action.
+    private var syncFailure: String? {
+        push.syncingTapeID != tape.id && push.lastSyncedTapeID == tape.id ? push.syncFailure : nil
+    }
+
+    private var footerNote: String? {
+        guard let post else { return nil }
+        let count = post.tracks.count == 1 ? "1 track" : "\(post.tracks.count) tracks"
+        return [tape.tape.catalogNumber, "\(count) in site order"].compactMap(\.self).joined(separator: " · ")
+    }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                siteStatusLine
-                if let post, fields != nil {
-                    if isOnSite { siteSection }
-                    Group {
-                        details
-                        descriptionSection(post)
-                        photos(post)
-                        tracks(post)
+        Group {
+            if let post, fields != nil {
+                HStack(alignment: .top, spacing: size == .regular ? 28 : 16) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if !showsStatus { statusBar }
+                        ScrollView {
+                            writing(post)
+                                .padding(.vertical, 14)
+                                .frame(maxWidth: 780, alignment: .leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
-                    .disabled(needsRefresh || push.syncingTapeID == tape.id)
-                    if !isOnSite { pushSection }
-                } else {
-                    ProgressView().frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
+                    if showsStatus {
+                        statusColumn(post)
+                            .frame(width: size.rightColumn)
+                    }
                 }
+                .padding(.horizontal, 28)
+            } else {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .padding(20)
-            .frame(maxWidth: 720, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Theme.paper)
         .task(id: tape.id) { await observe() }
-        .task(id: tape.tape.approvedAt) { await push.load(tape) }
+        .task(id: tape.tape.approvedAt) {
+            await push.load(tape)
+            plannedApproval = tape.tape.approvedAt
+        }
+        .onChange(of: footerNote, initial: true) { _, note in model.footerNote = note }
         .onDisappear { saveNow() }
         .onChange(of: push.refreshes) { _, _ in reloadDrafts() }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showsStatus.toggle()
+                } label: {
+                    Label("Site Status", systemImage: "sidebar.trailing")
+                }
+                .help(showsStatus ? "Hide site status" : "Show site status")
+            }
+        }
+        .sheet(isPresented: $isManagingPhotos, onDismiss: { saveNow() }) {
+            PhotosSheet(
+                tapeID: tape.id,
+                post: $post,
+                captions: $captions,
+                isLocked: isLocked,
+                onCaptionChange: scheduleSave
+            )
+        }
         .confirmationDialog("Replace what’s written here with what the site has?", isPresented: $confirmingRefresh) {
             Button("Refresh from Site", role: .destructive) { push.refresh(tape) }
         } message: {
@@ -179,390 +260,484 @@ struct SitePostView: View {
         )
     }
 
-    // MARK: Sections
+    // MARK: Writing
 
-    private var siteStatusLine: some View {
-        Text(isOnSite ? "ON THE SITE · \(tape.tape.catalogNumber ?? "")" : "NOT ON THE SITE YET")
-            .font(.system(size: 11, design: .monospaced))
-            .foregroundStyle(Theme.inkMuted)
-    }
-
-    @ViewBuilder private var siteSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let snapshot = post.flatMap({ SiteSnapshot.decode($0.tape.siteSnapshot) }) {
-                HStack(spacing: 10) {
-                    Label(
-                        snapshot.published ? "Published. Visitors can see it." : "Not published. Only you can see it.",
-                        systemImage: snapshot.published ? "eye" : "eye.slash"
-                    )
-                    .font(.callout)
-                    .foregroundStyle(snapshot.published ? Theme.goodText : Theme.inkMuted)
-                    .lineLimit(1)
-                    Spacer(minLength: 8)
-                    if push.hasKey {
-                        Button(snapshot.published ? "Unpublish" : "Publish") {
-                            push.setPublished(tape, !snapshot.published)
-                        }
-                        .disabled(needsRefresh || push.isPushing)
-                        .fixedSize()
-                    }
-                }
-            }
-            if needsRefresh {
-                Text("Refresh from the site to load what it has now, including anything changed in its admin. Then edit here and send the changes with Update on Site.")
-                    .font(.callout)
-                    .foregroundStyle(Theme.inkMuted)
-                    .lineLimit(3)
-            } else if let changes {
-                if changes.isEmpty {
-                    Text("Matches the site.")
-                        .font(.callout)
-                        .foregroundStyle(Theme.goodText)
-                } else {
-                    Text("To send: \(changes.summary.joined(separator: ", "))")
-                        .font(.callout)
-                        .foregroundStyle(Theme.ink)
-                        .lineLimit(3)
-                }
-                ForEach(changes.notSent, id: \.self) { note in
-                    Text(note)
-                        .font(.caption)
-                        .foregroundStyle(Theme.attention)
-                        .lineLimit(3)
-                }
-            }
-            if push.syncingTapeID == tape.id {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text(progressLabel)
-                        .font(.callout)
-                        .lineLimit(1)
-                }
-            } else {
-                if push.lastSyncedTapeID != tape.id {
-                    EmptyView()
-                } else if let failure = push.syncFailure {
-                    Text(failure)
-                        .foregroundStyle(Theme.attention)
-                        .lineLimit(4)
-                } else if let note = push.syncNote {
-                    Text(note)
-                        .font(.callout)
-                        .foregroundStyle(Theme.inkMuted)
-                        .lineLimit(3)
-                }
-                if !push.hasKey {
-                    keyEntry
-                } else {
-                    HStack {
-                        if !needsRefresh {
-                            Button("Update on Site", systemImage: "arrow.up.circle") {
-                                saveNow()
-                                Task {
-                                    try? await Task.sleep(for: .milliseconds(300))
-                                    push.update(tape)
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Theme.accent)
-                            .disabled(changes?.isEmpty != false || push.isPushing)
-                            .fixedSize()
-                        }
-                        Button("Refresh from Site", systemImage: "arrow.down.circle") {
-                            if changes?.isEmpty == false { confirmingRefresh = true } else { push.refresh(tape) }
-                        }
-                        .disabled(push.isPushing)
-                        .fixedSize()
-                        Spacer(minLength: 8)
-                        Button("Delete from Site…", systemImage: "trash") { confirmingDelete = true }
-                            .disabled(push.isPushing || needsRefresh)
-                            .fixedSize()
-                            .help(needsRefresh ? "Refresh from the site first" : "Remove this post from the site")
-                    }
-                }
-            }
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.card, in: .rect(cornerRadius: 10))
-    }
-
-    private var details: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            field("Title") {
-                TextField("Unlabeled Scotch reel, estate sale", text: binding(\.title))
-                    .textFieldStyle(.roundedBorder)
-                    .font(Theme.display(20))
-            }
-            HStack(alignment: .top, spacing: 14) {
-                field("Medium") {
-                    Picker("Medium", selection: Binding(
-                        get: { fields?.medium },
-                        set: { fields?.medium = $0; scheduleSave() }
-                    )) {
-                        if fields?.medium == nil { Text("Choose…").tag(SiteMedium?.none) }
-                        ForEach(SiteMedium.allCases) { medium in
-                            Text(medium.label).tag(SiteMedium?.some(medium))
-                        }
-                    }
-                    .labelsHidden()
-                }
-                field("Estimated recording date") {
-                    TextField("c. 1972–1975", text: binding(\.recordedDate))
-                        .textFieldStyle(.roundedBorder)
-                    if let era = post?.eraReference, fields?.recordedDate.isEmpty == true {
-                        Button("Claude suggests \(era). Use It") {
-                            fields?.recordedDate = era
-                            scheduleSave()
-                        }
-                        .buttonStyle(.link)
-                        .font(.caption)
-                        .lineLimit(1)
-                    }
-                }
-            }
-            HStack(alignment: .top, spacing: 14) {
-                field("Where found") {
-                    TextField(post?.collection?.whereFound ?? "Estate sale, Memphis TN", text: binding(\.whereFound))
-                        .textFieldStyle(.roundedBorder)
-                }
-                field("Date acquired") {
-                    TextField(post?.collection?.dateFound ?? "2024-03-15", text: binding(\.dateFound))
-                        .textFieldStyle(.roundedBorder)
-                }
-            }
-            if let collection = post?.collection {
-                Text("Left blank, these come from its collection, \(collection.name).")
-                    .font(.caption)
-                    .foregroundStyle(Theme.inkMuted)
-            }
-        }
-    }
-
-    private func descriptionSection(_ post: SitePost) -> some View {
-        field("Description") {
-            editor(binding(\.description), minHeight: 180, label: "Description")
-            Text("Blank lines separate paragraphs. A paragraph of just [photo 2] places the second photo there.")
-                .font(.caption)
-                .foregroundStyle(Theme.inkMuted)
-                .lineLimit(2)
-            if let reference = post.summaryReference {
-                ReferenceBox(title: "Claude’s summary, for reference", text: reference) {
-                    fields?.description = reference
-                    scheduleSave()
-                } canUse: { fields?.description.isEmpty == true }
-            }
-        }
-    }
-
-    private func photos(_ post: SitePost) -> some View {
-        field("Photos") {
-            if !post.images.isEmpty {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], alignment: .leading, spacing: 12) {
-                    ForEach(Array(post.images.enumerated()), id: \.element.id) { index, image in
-                        photoCard(image, number: index + 1, count: post.images.count)
-                    }
-                }
-            }
-            HStack(spacing: 10) {
-                Button("Add Photos…", systemImage: "photo.badge.plus") { choosePhotos() }
-                    .fixedSize()
-                Text("Or drop them here. Locations are removed, and HEIC becomes JPEG.")
-                    .font(.caption)
-                    .foregroundStyle(Theme.inkMuted)
-                    .lineLimit(2)
-            }
-        }
-        .padding(isDropTargeted ? 8 : 0)
-        .background(isDropTargeted ? Theme.card : .clear, in: .rect(cornerRadius: 10))
-        .dropDestination(for: URL.self) { urls, _ in
-            addPhotos(urls)
-            return true
-        } isTargeted: { isDropTargeted = $0 }
-    }
-
-    private func photoCard(_ image: TapeImage, number: Int, count: Int) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Thumbnail(url: try? model.library?.url(forLibraryPath: image.path))
-                .frame(height: 110)
-                .frame(maxWidth: .infinity)
-                .clipShape(.rect(cornerRadius: 6))
-            HStack(spacing: 4) {
-                Text("Photo \(number)")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(Theme.inkMuted)
-                    .fixedSize()
+    private func writing(_ post: SitePost) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                sectionTitle("Site Post")
                 Spacer(minLength: 0)
-                Button("Earlier", systemImage: "chevron.left") { move(image, by: -1) }
-                    .disabled(number == 1)
-                Button("Later", systemImage: "chevron.right") { move(image, by: 1) }
-                    .disabled(number == count)
-                Button("Remove", systemImage: "trash") { remove(image) }
+                // Typing saves by itself. This saves without the wait.
+                Button("Save") { saveNow() }
+                    .buttonStyle(.paperStandard)
+                    .disabled(isLocked)
+                    .help("Save now. Changes also save by themselves.")
             }
-            .labelStyle(.iconOnly)
-            .buttonStyle(.borderless)
-            TextField("Caption (optional)", text: Binding(
-                get: { captions[image.id ?? 0] ?? "" },
-                set: { captions[image.id ?? 0] = $0; scheduleSave() }
-            ))
-            .textFieldStyle(.roundedBorder)
-            .font(.caption)
+            Group {
+                labeled("Public title") {
+                    TextField("Unlabeled Scotch reel, estate sale", text: binding(\.title))
+                        .font(Theme.serif(size.rowName))
+                        .paperField()
+                        .accessibilityLabel("Public title")
+                }
+                labeled("Description") {
+                    editor(binding(\.description), font: Theme.serif(size == .regular ? 20 : 16), minHeight: 180, label: "Description")
+                    hint("Blank lines separate paragraphs. A paragraph of just [photo 2] places the second photo there.")
+                }
+                HStack(alignment: .top, spacing: size == .regular ? 26 : 14) {
+                    labeled("Estimated date") {
+                        TextField("c. 1972–1975", text: binding(\.recordedDate))
+                            .paperField()
+                            .accessibilityLabel("Estimated recording date")
+                        if let era = post.eraReference, fields?.recordedDate.isEmpty == true {
+                            Button("Claude suggests \(era). Use It") {
+                                fields?.recordedDate = era
+                                scheduleSave()
+                            }
+                            .buttonStyle(.link)
+                            .font(.caption)
+                            .lineLimit(2)
+                        }
+                    }
+                    labeled("Medium") {
+                        Picker("Medium", selection: Binding(
+                            get: { fields?.medium },
+                            set: { fields?.medium = $0; scheduleSave() }
+                        )) {
+                            if fields?.medium == nil { Text("Choose…").tag(SiteMedium?.none) }
+                            ForEach(SiteMedium.allCases) { medium in
+                                Text(medium.label).tag(SiteMedium?.some(medium))
+                            }
+                        }
+                        .labelsHidden()
+                        .padding(.top, 5)
+                    }
+                }
+            }
+            .disabled(isLocked)
+            finding(post)
+            tracks(post)
         }
-        .padding(8)
-        .background(Theme.card, in: .rect(cornerRadius: 8))
     }
+
+    /// Where and when it was found, in a line until it needs changing.
+    private func finding(_ post: SitePost) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    findingLine(post)
+                        .fixedSize()
+                    Spacer(minLength: 0)
+                    findingButton
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    findingLine(post)
+                    findingButton
+                }
+            }
+            if isEditingFinding {
+                HStack(alignment: .top, spacing: size == .regular ? 26 : 14) {
+                    labeled("Where found") {
+                        TextField(post.collection?.whereFound ?? "Estate sale, Memphis TN", text: binding(\.whereFound))
+                            .paperField()
+                            .accessibilityLabel("Where found")
+                    }
+                    labeled("Date acquired") {
+                        TextField(post.collection?.dateFound ?? "2024-03-15", text: binding(\.dateFound))
+                            .paperField()
+                            .accessibilityLabel("Date acquired")
+                    }
+                }
+                .disabled(isLocked)
+                if let collection = post.collection {
+                    hint("Left blank, these come from its collection, \(collection.name).")
+                }
+            }
+        }
+    }
+
+    /// What the post will say: what's typed here, or else the collection's.
+    private func findingLine(_ post: SitePost) -> some View {
+        let values = [
+            (own: fields?.whereFound ?? "", inherited: post.collection?.whereFound),
+            (own: fields?.dateFound ?? "", inherited: post.collection?.dateFound),
+        ].compactMap { value -> (text: String, isInherited: Bool)? in
+            let own = value.own.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !own.isEmpty { return (own, false) }
+            return value.inherited.map { ($0, true) }
+        }
+        let inherited = values.filter(\.isInherited).count
+        var line = values.map(\.text).joined(separator: " · ")
+        if values.isEmpty {
+            line = "Where and when it was found isn’t written yet."
+        } else if inherited == values.count {
+            line += "  (from collection)"
+        } else if inherited > 0 {
+            line += "  (partly from collection)"
+        }
+        return Text(line)
+            .font(.system(size: 12))
+            .foregroundStyle(Theme.muted)
+            .lineLimit(2)
+            .help(line)
+    }
+
+    private var findingButton: some View {
+        Button(isEditingFinding ? "Hide finding details" : "Edit finding details…") {
+            isEditingFinding.toggle()
+        }
+        .buttonStyle(.paperSmall)
+    }
+
+    // MARK: Tracks
 
     private func tracks(_ post: SitePost) -> some View {
-        field(post.tracks.count == 1 ? "Track" : "Tracks") {
-            Text("Each track’s description shows under its title in the site’s player.")
-                .font(.caption)
-                .foregroundStyle(Theme.inkMuted)
-                .lineLimit(2)
-            ForEach(Array(post.tracks.enumerated()), id: \.element.id) { index, track in
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 10) {
-                        Text(String(format: "%02d", index + 1))
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(Theme.inkMuted)
-                            .fixedSize()
-                        TextField(post.tracks.count == 1 ? tape.tape.title : "Track \(index + 1)", text: Binding(
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                sectionTitle(post.tracks.count == 1 ? "Public track" : "Public tracks")
+                Spacer(minLength: 0)
+                textButton("Edit track order →") { model.switchTab(.edit) }
+            }
+            hint("Open a track to name and describe it. The description shows under its title in the site’s player.")
+            VStack(spacing: 0) {
+                ForEach(Array(post.tracks.enumerated()), id: \.element.id) { index, track in
+                    trackRow(track, index: index, count: post.tracks.count)
+                }
+            }
+        }
+    }
+
+    /// A track as the site will list it. Opening it shows its name and description.
+    @ViewBuilder private func trackRow(_ track: PostTrack, index: Int, count: Int) -> some View {
+        let isOpen = openTrackID == track.id
+        // What the site calls a track with no name of its own.
+        let unnamed = count == 1 ? tape.tape.title : "Track \(index + 1)"
+        let typed = trackNames[track.id] ?? ""
+        // The side, as Review shows it. The recording's name would repeat the title.
+        let side = tape.items.first { $0.source.id == track.sourceID }?.source.side.map { "Side \($0)" }
+
+        Button {
+            openTrackID = isOpen ? nil : track.id
+        } label: {
+            NumberedTrackRow(
+                number: String(format: "%02d", index + 1),
+                detail: [side, TimeLabel.clock(track.start)].compactMap(\.self).joined(separator: " · "),
+                duration: TimeLabel.clock(track.duration),
+                size: size,
+                isPicked: isOpen
+            ) {
+                HStack(spacing: 6) {
+                    Text(typed.isEmpty ? unnamed : typed)
+                        .font(Theme.serif(size.rowName))
+                        .foregroundStyle(Theme.ink)
+                        .lineLimit(1)
+                    Image(systemName: isOpen ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Theme.muted)
+                        .accessibilityHidden(true)
+                }
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(isOpen ? "Closes its name and description" : "Opens its name and description")
+
+        if isOpen {
+            VStack(alignment: .leading, spacing: 10) {
+                Group {
+                    labeled("Track name") {
+                        TextField(unnamed, text: Binding(
                             get: { trackNames[track.id] ?? "" },
                             set: { trackNames[track.id] = $0; scheduleSave() }
                         ))
-                        .textFieldStyle(.roundedBorder)
-                        Text(TimeLabel.clock(track.duration))
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(Theme.inkMuted)
-                            .fixedSize()
+                        .paperField()
+                        .accessibilityLabel("Name of track \(index + 1)")
                     }
-                    editor(Binding(
-                        get: { trackText[track.id] ?? "" },
-                        set: { trackText[track.id] = $0; scheduleSave() }
-                    ), minHeight: 64, label: "Description of track \(index + 1)")
-                    if let summary = track.summaryLong ?? track.summaryShort {
-                        ReferenceBox(title: "Claude’s summary of this track", text: summary) {
-                            trackText[track.id] = summary
+                    labeled("Track description") {
+                        editor(Binding(
+                            get: { trackText[track.id] ?? "" },
+                            set: { trackText[track.id] = $0; scheduleSave() }
+                        ), font: .system(size: 13), minHeight: 72, label: "Description of track \(index + 1)")
+                    }
+                }
+                .disabled(isLocked)
+                if let summary = track.summaryLong ?? track.summaryShort {
+                    ReferenceBox(title: "Claude’s summary of this track", text: summary) {
+                        trackText[track.id] = summary
+                        scheduleSave()
+                    } canUse: { !isLocked && (trackText[track.id] ?? "").isEmpty }
+                }
+            }
+            .padding(12)
+            .background(Theme.inset, in: .rect(cornerRadius: 4))
+            .padding(.vertical, 8)
+        }
+    }
+
+    // MARK: Site status
+
+    private func statusColumn(_ post: SitePost) -> some View {
+        let status = status
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    CapLabel("Site status")
+                    Text(status.heading)
+                        .font(Theme.serif(size.sectionTitle))
+                        .foregroundStyle(Theme.ink)
+                        .accessibilityAddTraits(.isHeader)
+                    Text(status.explanation)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.muted)
+                }
+                steps(status)
+                messages
+                HairlineRule()
+                    .padding(.vertical, 4)
+                photograph(post)
+                if let reference = post.summaryReference {
+                    HairlineRule()
+                        .padding(.vertical, 4)
+                    VStack(alignment: .leading, spacing: 8) {
+                        CapLabel("Writing reference")
+                            .accessibilityAddTraits(.isHeader)
+                        ReferenceBox(title: "Claude’s summary", text: reference) {
+                            fields?.description = reference
                             scheduleSave()
-                        } canUse: { (trackText[track.id] ?? "").isEmpty }
+                        } canUse: { !isLocked && fields?.description.isEmpty == true }
                     }
                 }
-                .padding(10)
-                .background(Theme.card.opacity(0.6), in: .rect(cornerRadius: 8))
+            }
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.leading, size == .regular ? 24 : 14)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(Theme.line)
+                .frame(width: 1)
+                .accessibilityHidden(true)
+        }
+    }
+
+    /// The stage's main button, and the smaller things that can be done.
+    @ViewBuilder private func steps(_ status: SiteStatus) -> some View {
+        if push.syncingTapeID == tape.id {
+            syncing
+        } else if status.stage == .pushing {
+            progressView(status)
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                if status.stage == .needsKey {
+                    keyEntry
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 8) { buttons(status) }
+                        VStack(alignment: .leading, spacing: 8) { buttons(status) }
+                    }
+                }
+                if status.stage == .readyToCreateDraft {
+                    if let planProblem {
+                        Text(planProblem)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.attention)
+                    }
+                    if let blockedReason, !blockedReason.isEmpty {
+                        hint(blockedReason)
+                    }
+                }
+                if status.canWithdrawApproval {
+                    textButton("Withdraw approval") {
+                        Task { await model.setApproved(tape, false) }
+                    }
+                }
+                if !status.otherActions.isEmpty || status.offersRemoval {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 12) { otherSteps(status) }
+                        VStack(alignment: .leading, spacing: 8) { otherSteps(status) }
+                    }
+                }
             }
         }
     }
 
-    // MARK: Pushing
+    @ViewBuilder private func buttons(_ status: SiteStatus) -> some View {
+        if let action = status.mainAction {
+            Button(action.title) { perform(action) }
+                .buttonStyle(PaperButtonStyle(isPrimary: action != .stop))
+                .disabled(!status.isEnabled(action))
+        }
+        if let action = status.besideAction {
+            Button(action.title) { perform(action) }
+                .buttonStyle(.paperStandard)
+                .disabled(!status.isEnabled(action))
+        }
+    }
 
-    @ViewBuilder private var pushSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Divider()
-            if let result = push.finished?.tapeID == tape.id ? push.finished?.result : nil {
-                Text("\(result.catalogNumber) is on the site")
-                    .font(Theme.display(22))
+    @ViewBuilder private func otherSteps(_ status: SiteStatus) -> some View {
+        ForEach(status.otherActions, id: \.self) { action in
+            textButton(action.title) { perform(action) }
+                .disabled(!status.isEnabled(action))
+        }
+        if status.offersRemoval {
+            Menu("More") {
+                Button("Remove from site…", role: .destructive) { confirmingDelete = true }
+                    .disabled(!status.canRemove)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help(status.facts.needsRefresh ? "Refresh from the site first to remove this post" : "Remove this post from the site")
+        }
+    }
+
+    private func perform(_ action: SiteAction) {
+        switch action {
+        case .approve:
+            saveNow()
+            Task { await model.setApproved(tape, true) }
+        case .createDraft, .tryAgain:
+            afterSaving { push.start(tape) }
+        case .stop:
+            push.cancel()
+        case .refresh:
+            if changes?.isEmpty == false { confirmingRefresh = true } else { push.refresh(tape) }
+        case .publish:
+            afterSaving { push.setPublished(tape, true) }
+        case .unpublish:
+            afterSaving { push.setPublished(tape, false) }
+        case .update:
+            afterSaving { push.update(tape) }
+        }
+    }
+
+    /// Lets the last save land before the post is read to be sent.
+    private func afterSaving(_ send: @escaping @MainActor () -> Void) {
+        saveNow()
+        Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            send()
+        }
+    }
+
+    /// How the last thing sent went, and how what's written here compares with the site.
+    @ViewBuilder private var messages: some View {
+        if let pushFailure {
+            failureText(pushFailure)
+        }
+        if let syncFailure {
+            failureText(syncFailure)
+        } else if push.syncingTapeID != tape.id, push.lastSyncedTapeID == tape.id, let note = push.syncNote {
+            hint(note)
+        }
+        if isOnSite, !needsRefresh, let changes {
+            if changes.isEmpty {
+                Text("Matches the site.")
+                    .font(.system(size: 12))
                     .foregroundStyle(Theme.goodText)
-            }
-            if let failure = push.failure, push.pushingTapeID == nil {
-                Text(failure)
-                    .foregroundStyle(Theme.attention)
-                    .lineLimit(4)
-            }
-            if push.pushingTapeID == tape.id {
-                progressView
-            } else if tape.tape.approvedAt == nil {
-                HStack {
-                    Button("Looks Good", systemImage: "hand.thumbsup") {
-                        saveNow()
-                        Task { await model.setApproved(tape, true) }
-                    }
-                    .fixedSize()
-                    Text("Mark it as Looks Good when it’s ready to push.")
-                        .font(.callout)
-                        .foregroundStyle(Theme.inkMuted)
-                        .lineLimit(2)
-                }
-            } else if !push.hasKey {
-                keyEntry
             } else {
-                if let problem = push.planProblem {
-                    Text(problem)
-                        .foregroundStyle(Theme.attention)
-                        .lineLimit(3)
-                }
-                Text("Pushing creates the post unpublished, with a catalog number from the site. Publish it here once you’ve checked it on the site.")
-                    .font(.callout)
-                    .foregroundStyle(Theme.inkMuted)
-                    .lineLimit(3)
-                HStack {
-                    Button(push.failure == nil ? "Push to Site" : "Try Again", systemImage: "arrow.up.circle") {
-                        saveNow()
-                        Task {
-                            // Lets the last save land before the push reads the post.
-                            try? await Task.sleep(for: .milliseconds(300))
-                            push.start(tape)
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Theme.accent)
-                    .disabled(blockedReason != nil)
-                    .fixedSize()
-                    if let reason = blockedReason {
-                        Text(reason)
-                            .font(.callout)
-                            .foregroundStyle(Theme.inkMuted)
-                            .lineLimit(2)
-                    }
-                }
+                Text("To send: \(changes.summary.joined(separator: ", "))")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.ink)
+            }
+            ForEach(changes.notSent, id: \.self) { note in
+                Text(note)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.attention)
             }
         }
     }
 
-    private var blockedReason: String? {
-        if push.isPushing { return "Another tape is being pushed." }
-        if model.recordModel.isRecording { return "Finish recording first." }
-        if tape.status.isActive { return "This tape is still being processed." }
-        if push.planProblem != nil { return "" }
-        if fields?.medium == nil { return "Choose a medium first." }
-        return nil
+    private func failureText(_ failure: String) -> some View {
+        Text(failure)
+            .font(.system(size: 13))
+            .foregroundStyle(Theme.attention)
+            .textSelection(.enabled)
     }
 
-    @State private var key = ""
+    /// With the column hidden, the post's state, its next step and any failure stay
+    /// above the writing.
+    private var statusBar: some View {
+        let status = status
+        let blocked = status.stage == .readyToCreateDraft
+            ? planProblem ?? blockedReason.flatMap { $0.isEmpty ? nil : $0 }
+            : nil
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                StatusBadge(
+                    text: status.heading,
+                    tone: !isOnSite ? .idle : status.facts.sitePublished == true ? .published : .draft
+                )
+                Spacer(minLength: 0)
+                if push.syncingTapeID == tape.id {
+                    syncing
+                } else if status.stage == .needsKey {
+                    Button("Enter Site Key…") { showsStatus = true }
+                        .buttonStyle(.paperStandard)
+                } else {
+                    if status.stage == .pushing {
+                        Text(progressLabel)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.ink)
+                            .lineLimit(1)
+                    }
+                    buttons(status)
+                }
+            }
+            if let problem = pushFailure ?? syncFailure ?? blocked {
+                Text(problem)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.attention)
+                    .lineLimit(2)
+                    .help(problem)
+            }
+        }
+        .padding(.vertical, 8)
+        .overlay(alignment: .bottom) { HairlineRule() }
+    }
 
     private var keyEntry: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Enter the site’s sync API key. It’s kept in your Keychain.")
-                .font(.callout)
-                .foregroundStyle(Theme.inkMuted)
-            HStack {
-                SecureField("SYNC_API_KEY", text: $key)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 320)
-                Button("Save") {
-                    push.saveKey(key)
-                    key = ""
-                }
+        VStack(alignment: .leading, spacing: 8) {
+            hint("Enter the site’s sync API key. It’s kept in your Keychain.")
+            SecureField("SYNC_API_KEY", text: $key)
+                .paperField()
+                .onSubmit { saveKey() }
+                .accessibilityLabel("Site sync API key")
+            Button("Save Key") { saveKey() }
+                .buttonStyle(.paperPrimary)
                 .disabled(key.isEmpty)
-                .fixedSize()
-            }
         }
     }
 
-    private var progressView: some View {
-        VStack(alignment: .leading, spacing: 6) {
+    private func saveKey() {
+        guard !key.isEmpty else { return }
+        push.saveKey(key)
+        key = ""
+    }
+
+    private var syncing: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
             Text(progressLabel)
+                .font(.system(size: 12))
                 .foregroundStyle(Theme.ink)
-                .lineLimit(1)
+                .lineLimit(2)
+        }
+    }
+
+    private func progressView(_ status: SiteStatus) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(progressLabel)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.ink)
+                .lineLimit(2)
             if case .uploading(_, _, let fraction) = push.progress {
                 ProgressView(value: fraction).tint(Theme.accent)
             } else {
                 ProgressView().progressViewStyle(.linear).tint(Theme.accent)
             }
-            Button("Stop") { push.cancel() }
-                .fixedSize()
-            Text("Stopping keeps what’s finished, so pushing again picks up from there.")
-                .font(.callout)
-                .foregroundStyle(Theme.inkMuted)
-                .lineLimit(2)
+            buttons(status)
+            hint("Stopping keeps what’s finished, so pushing again picks up from there.")
         }
     }
 
@@ -578,27 +753,242 @@ struct SitePostView: View {
 
     // MARK: Photos
 
-    private func choosePhotos() {
+    /// The post's first photo, and the way to the rest.
+    private func photograph(_ post: SitePost) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            CapLabel("Post photograph")
+                .accessibilityAddTraits(.isHeader)
+            if let image = post.images.first {
+                Thumbnail(url: try? model.library?.url(forLibraryPath: image.path))
+                    .frame(width: 125, height: 150)
+                    .clipShape(.rect(cornerRadius: 3))
+                    .accessibilityLabel("Photo 1")
+                if let caption = captions[image.id ?? 0], !caption.isEmpty {
+                    Text(caption)
+                        .font(Theme.serif(13).italic())
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(3)
+                }
+                if post.images.count > 1 {
+                    hint("First of \(post.images.count) photos.")
+                }
+            } else {
+                hint("No photos yet. Drop some here, or add them from Manage photos.")
+            }
+            textButton("Manage photos…") { isManagingPhotos = true }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(isDropTargeted ? 8 : 0)
+        .background(isDropTargeted ? Theme.inset : .clear, in: .rect(cornerRadius: 6))
+        .contentShape(.rect)
+        .dropDestination(for: URL.self) { urls, _ in
+            // Taken even when locked, so photos aren't imported as audio instead.
+            if !isLocked, let library = model.library {
+                addPhotos(urls, to: tape.id, in: library) { AppModel.shared.message = $0 }
+            }
+            return true
+        } isTargeted: { isDropTargeted = $0 && !isLocked }
+    }
+
+    // MARK: Pieces
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(Theme.serif(size.sectionTitle))
+            .foregroundStyle(Theme.ink)
+            .lineLimit(1)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private func labeled<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            CapLabel(title)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func hint(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundStyle(Theme.muted)
+    }
+
+    /// A quiet action, drawn as words.
+    private func textButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 13))
+                .underline()
+                .foregroundStyle(Theme.ink)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+    }
+
+    private func editor(_ text: Binding<String>, font: Font, minHeight: CGFloat, label: String) -> some View {
+        TextEditor(text: text)
+            .font(font)
+            .foregroundStyle(Theme.ink)
+            .scrollContentBackground(.hidden)
+            .padding(6)
+            .frame(minHeight: minHeight)
+            .background(Theme.field, in: .rect(cornerRadius: 5))
+            .overlay {
+                RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(Theme.fieldBorder)
+                    .allowsHitTesting(false)
+            }
+            .accessibilityLabel(label)
+    }
+}
+
+/// Copies photos into a tape's post, one at a time, reporting any that can't be.
+private func addPhotos(
+    _ urls: [URL],
+    to tapeID: Int64,
+    in library: Library,
+    failed: @escaping @MainActor @Sendable (String) -> Void
+) {
+    Task.detached {
+        for url in urls {
+            do {
+                try await library.addImage(tapeID: tapeID, from: url)
+            } catch {
+                await failed(error.localizedDescription)
+            }
+        }
+    }
+}
+
+/// Every photo on a post, in the order the site numbers them.
+private struct PhotosSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State private var isDropTargeted = false
+    /// Shown here, since the window's own alert waits behind a sheet.
+    @State private var problem: String?
+
+    let tapeID: Int64
+    @Binding var post: SitePost?
+    @Binding var captions: [Int64: String]
+    let isLocked: Bool
+    let onCaptionChange: () -> Void
+
+    private var images: [TapeImage] { post?.images ?? [] }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Photos")
+                    .font(Theme.serif(27))
+                    .foregroundStyle(Theme.ink)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 0)
+                Button("Done") { dismiss() }
+                    .buttonStyle(.paperPrimary)
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(20)
+
+            HairlineRule()
+
+            ScrollView {
+                if images.isEmpty {
+                    Text("No photos yet.")
+                        .foregroundStyle(Theme.muted)
+                        .frame(maxWidth: .infinity)
+                        .padding(40)
+                } else {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], alignment: .leading, spacing: 12) {
+                        ForEach(Array(images.enumerated()), id: \.element.id) { index, image in
+                            card(image, number: index + 1)
+                        }
+                    }
+                    .padding(20)
+                }
+            }
+            .disabled(isLocked)
+
+            HairlineRule()
+
+            VStack(alignment: .leading, spacing: 8) {
+                if let problem {
+                    Text(problem)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.attention)
+                        .lineLimit(3)
+                        .help(problem)
+                }
+                HStack(spacing: 10) {
+                    Button("Add Photos…", systemImage: "photo.badge.plus") { choose() }
+                        .buttonStyle(.paperStandard)
+                        .disabled(isLocked)
+                    Text(isLocked
+                         ? "Refresh from the site before changing its photos."
+                         : "Or drop them here. Locations are removed, and HEIC becomes JPEG. A paragraph of just [photo 2] in the description places the second photo there.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(3)
+                }
+            }
+            .padding(20)
+        }
+        // A fixed size, so the text in it is never measured at no width.
+        .frame(width: 580, height: 500)
+        .background(isDropTargeted ? Theme.inset : Theme.paper)
+        .dropDestination(for: URL.self) { urls, _ in
+            add(urls)
+            return !isLocked
+        } isTargeted: { isDropTargeted = $0 && !isLocked }
+    }
+
+    private func card(_ image: TapeImage, number: Int) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Thumbnail(url: try? model.library?.url(forLibraryPath: image.path))
+                .frame(height: 110)
+                .frame(maxWidth: .infinity)
+                .clipShape(.rect(cornerRadius: 3))
+            HStack(spacing: 6) {
+                Text("Photo \(number)")
+                    .font(Theme.mono(11))
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize()
+                Spacer(minLength: 0)
+                Button("Earlier", systemImage: "chevron.left") { move(image, by: -1) }
+                    .disabled(number == 1)
+                Button("Later", systemImage: "chevron.right") { move(image, by: 1) }
+                    .disabled(number == images.count)
+                Button("Remove", systemImage: "trash") { remove(image) }
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            TextField("Caption (optional)", text: Binding(
+                get: { captions[image.id ?? 0] ?? "" },
+                set: { captions[image.id ?? 0] = $0; onCaptionChange() }
+            ))
+            .font(.system(size: 12))
+            .paperField()
+            .accessibilityLabel("Caption of photo \(number)")
+        }
+        .padding(8)
+        .background(Theme.inset, in: .rect(cornerRadius: 4))
+    }
+
+    private func choose() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = true
         panel.message = "Choose photos of the tape, its box, labels or anything that came with it."
         guard panel.runModal() == .OK else { return }
-        addPhotos(panel.urls)
+        add(panel.urls)
     }
 
-    private func addPhotos(_ urls: [URL]) {
-        guard let library = model.library, !needsRefresh else { return }
-        let tapeID = tape.id
-        Task.detached {
-            for url in urls {
-                do {
-                    try await library.addImage(tapeID: tapeID, from: url)
-                } catch {
-                    await MainActor.run { AppModel.shared.message = error.localizedDescription }
-                }
-            }
-        }
+    private func add(_ urls: [URL]) {
+        guard let library = model.library, !isLocked else { return }
+        problem = nil
+        addPhotos(urls, to: tapeID, in: library) { problem = $0 }
     }
 
     private func move(_ image: TapeImage, by offset: Int) {
@@ -609,29 +999,6 @@ struct SitePostView: View {
     private func remove(_ image: TapeImage) {
         guard let library = model.library, let id = image.id else { return }
         Task.detached { try? await library.removeImage(id: id) }
-    }
-
-    // MARK: Pieces
-
-    private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title.uppercased())
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundStyle(Theme.inkMuted)
-            content()
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func editor(_ text: Binding<String>, minHeight: CGFloat, label: String) -> some View {
-        TextEditor(text: text)
-            .font(.system(size: 13))
-            .scrollContentBackground(.hidden)
-            .padding(6)
-            .frame(minHeight: minHeight)
-            .background(Theme.card, in: .rect(cornerRadius: 8))
-            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.inkMuted.opacity(0.2)) }
-            .accessibilityLabel(label)
     }
 }
 
@@ -654,16 +1021,10 @@ private struct ReferenceBox: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(maxHeight: 160)
-                HStack {
-                    if canUse() {
-                        Button("Use as a Starting Point") { use() }
-                            .fixedSize()
-                    }
-                    Button("Copy") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(text, forType: .string)
-                    }
-                    .fixedSize()
+                // Stacked where a column is too narrow for both.
+                ViewThatFits(in: .horizontal) {
+                    HStack { choices }
+                    VStack(alignment: .leading) { choices }
                 }
             }
             .padding(.top, 4)
@@ -672,6 +1033,18 @@ private struct ReferenceBox: View {
                 .font(.caption)
                 .foregroundStyle(Theme.inkMuted)
         }
+    }
+
+    @ViewBuilder private var choices: some View {
+        if canUse() {
+            Button("Use as a Starting Point") { use() }
+                .fixedSize()
+        }
+        Button("Copy") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        }
+        .fixedSize()
     }
 }
 
