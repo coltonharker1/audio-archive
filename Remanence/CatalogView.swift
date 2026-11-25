@@ -2,180 +2,327 @@ import RemanenceCore
 import SwiftUI
 
 /// Every reel by RA number, so the numbers can match the labels on the boxes. Drag a
-/// reel to a new place, or type a number. Nothing changes until Apply.
+/// reel to a new place, or type a number. The changes wait in the right column, and
+/// nothing changes until Apply.
 struct CatalogView: View {
     @Environment(AppModel.self) private var model
 
-    /// The numbers as they'll be after Apply, by tape.
-    @State private var staged: [Int64: String] = [:]
     /// What's being typed into a number field, by tape.
     @State private var typing: [Int64: String] = [:]
-    @State private var order: [Int64] = []
-    @State private var failure: String?
-    @State private var isApplying = false
     @State private var confirming = false
+    /// The width of the detail area, which sets sizes.
+    @State private var width: CGFloat = 680
 
-    private var byID: [Int64: ShelfTape] { Dictionary(uniqueKeysWithValues: model.shelf.map { ($0.id, $0) }) }
+    private var size: LayoutSize { LayoutSize(detailWidth: width) }
+
+    /// The mocks' padding follows the window's width, which is wider than this
+    /// screen by the sidebar.
+    private var padding: CGFloat { LayoutSize.pagePadding(windowWidth: width + 220) }
+
+    private var columnSpacing: CGFloat { size == .regular ? 28 : 18 }
 
     var body: some View {
+        let pending = model.catalogStaging.pending(in: model.shelf)
+
         VStack(alignment: .leading, spacing: 0) {
-            header
-            Divider()
-            List {
-                Section {
-                    ForEach(order, id: \.self) { id in
-                        if let tape = byID[id] { row(tape) }
-                    }
-                    .onMove(perform: move)
-                } footer: {
-                    if !unnumbered.isEmpty {
-                        Text("Tapes without a number are below. Type one to give it a number.")
-                    }
+            PageHeader(eyebrow: "Library", title: "Catalog", subtitle: "RA numbers match the labels on the boxes.", size: size)
+                .padding(.bottom, 25)
+            HStack(alignment: .top, spacing: columnSpacing) {
+                list
+                HStack(alignment: .top, spacing: 0) {
+                    Rectangle()
+                        .fill(Theme.line)
+                        .frame(width: 1)
+                        .accessibilityHidden(true)
+                    pendingColumn(pending)
+                        .padding(.leading, columnSpacing - 4)
                 }
-                if !unnumbered.isEmpty {
-                    Section("No number") {
-                        ForEach(unnumbered) { tape in row(tape) }
-                    }
-                }
+                .frame(width: size.rightColumn)
             }
-            .listStyle(.inset)
-            Divider()
-            footer
+            .frame(maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, padding)
+        .padding(.top, 22)
+        .padding(.bottom, 20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Theme.paper)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .task {
-            reset()
+            model.openCatalogList()
             await model.pushModel.refreshSiteNumbers()
         }
-        // With nothing staged, the list follows the shelf, as it does just after Apply.
-        .onChange(of: model.shelf) { _, _ in
-            if staged.isEmpty && typing.isEmpty && !isApplying { reset() }
-        }
-        .confirmationDialog("Renumber \(changes.count == 1 ? "1 reel" : "\(changes.count) reels")?", isPresented: $confirming, titleVisibility: .visible) {
-            Button("Renumber") { apply() }
+        .confirmationDialog("Renumber \(pending.count == 1 ? "1 reel" : "\(pending.count) reels")?", isPresented: $confirming, titleVisibility: .visible) {
+            Button("Renumber") { model.applyCatalog() }
         } message: {
-            Text(confirmMessage)
+            Text(confirmMessage(pending))
         }
     }
 
-    // MARK: Pieces
+    // MARK: The list
 
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Catalog")
-                    .font(Theme.display(24))
+    private var list: some View {
+        let staging = model.catalogStaging
+        let byID = Dictionary(uniqueKeysWithValues: model.shelf.map { ($0.id, $0) })
+        let unnumbered = staging.unnumbered(in: model.shelf)
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Text("By RA number")
+                    .font(Theme.serif(size.sectionTitle))
                     .foregroundStyle(Theme.ink)
-                Text("Every reel by RA number. Drag a reel to a new place to swap numbers along, or type a number. Nothing changes until you apply.")
-                    .font(.callout)
-                    .foregroundStyle(Theme.inkMuted)
-                    .lineLimit(2)
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 0)
+                Text(staging.order.count == 1 ? "1 reel" : "\(staging.order.count) reels")
+                    .font(Theme.mono())
+                    .foregroundStyle(Theme.ink)
+                    .fixedSize()
             }
-            Spacer()
+            // A list rather than a drawn table, which keeps its drag to reorder. The
+            // column names are a row of it, so they line up with the rows.
+            List {
+                CatalogColumnNames()
+                    .catalogListRow()
+                ForEach(staging.order, id: \.self) { id in
+                    if let tape = byID[id] {
+                        row(tape)
+                            .catalogListRow()
+                    }
+                }
+                .onMove { source, destination in
+                    // Committing typing can re-sort the list or shorten it, so the drag
+                    // is held by tape rather than by place.
+                    let order = model.catalogStaging.order
+                    let moved = source.filter(order.indices.contains).map { order[$0] }
+                    let before = order.indices.contains(destination) ? order[destination] : nil
+                    commitAllTyping()
+                    model.moveInCatalog(moved, before: before)
+                }
+                .moveDisabled(model.isApplyingCatalog)
+
+                note(unnumbered.isEmpty
+                    ? "Drag a reel or enter its new number to stage a change."
+                    : "Drag a reel or enter its new number to stage a change. Tapes without a number are below. Type one to give it a number.")
+                    .catalogListRow()
+
+                if !unnumbered.isEmpty {
+                    CapLabel("No number")
+                        .accessibilityAddTraits(.isHeader)
+                        .padding(.horizontal, CatalogColumns.inset)
+                        .padding(.top, 14)
+                        .padding(.bottom, 9)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .overlay(alignment: .bottom) { HairlineRule() }
+                        .catalogListRow()
+                    ForEach(unnumbered) { tape in
+                        row(tape)
+                            .catalogListRow()
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .environment(\.defaultMinListRowHeight, 1)
         }
-        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 13))
+            .foregroundStyle(Theme.muted)
+            .lineLimit(5)
+            .padding(.horizontal, CatalogColumns.inset)
+            .padding(.top, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func row(_ tape: ShelfTape) -> some View {
-        let original = tape.tape.catalogNumber ?? ""
-        let number = staged[tape.id] ?? original
+        let original = tape.tape.catalogNumber
+        let number = model.catalogStaging.number(of: tape)
         let changed = number != original
-        return HStack(spacing: 12) {
-            TextField("RA-000", text: Binding(
-                get: { typing[tape.id] ?? number },
-                set: { typing[tape.id] = $0 }
-            ))
-            .font(.system(size: 13, weight: changed ? .semibold : .regular, design: .monospaced))
-            .textFieldStyle(.roundedBorder)
-            .frame(width: 92)
-            .onSubmit { commitTyping(tape) }
-            .accessibilityLabel("Number for \(tape.tape.title)")
-            if changed, !original.isEmpty {
-                Text("was \(original)")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(Theme.accent)
-                    .fixedSize()
-            }
-            Text(tape.tape.title)
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.ink)
-                .lineLimit(1)
-            Spacer(minLength: 8)
+        let collection = model.collection(of: tape)?.collection.name
+
+        return HStack(spacing: CatalogColumns.spacing) {
             Group {
-                if let collection = model.collection(of: tape) {
-                    Label(collection.collection.name, systemImage: "shippingbox")
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                // Only numbered reels can be dragged.
+                if model.catalogStaging.order.contains(tape.id) {
+                    Image(systemName: "line.3.horizontal")
+                        .foregroundStyle(Theme.muted)
+                        .help("Drag to move")
+                        .accessibilityHidden(true)
+                } else {
+                    Color.clear.frame(height: 1)
                 }
             }
-            .font(.system(size: 11))
-            .foregroundStyle(Theme.inkMuted)
-            .frame(width: 190, alignment: .leading)
-            Text(status(of: tape))
-                .font(.system(size: 11))
-                .foregroundStyle(isPublished(tape) ? Theme.goodText : Theme.inkMuted)
-                .frame(width: 92, alignment: .trailing)
+            .frame(width: CatalogColumns.move, alignment: .leading)
+
+            Text(original ?? "—")
+                .font(Theme.mono())
+                .foregroundStyle(Theme.ink)
+                .lineLimit(1)
+                .help(original ?? "No number")
+                .frame(width: CatalogColumns.current, alignment: .leading)
+                .accessibilityLabel(original.map { "Now \($0)" } ?? "No number")
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(tape.tape.title)
+                    .font(Theme.serif(size.rowName))
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(1)
+                    .help(tape.tape.title)
+                if let collection {
+                    Text(collection)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(1)
+                        .help(collection)
+                        .accessibilityLabel("In the collection \(collection)")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            TextField("RA-000", text: Binding(
+                get: { typing[tape.id] ?? number ?? "" },
+                set: { typing[tape.id] = $0 }
+            ))
+            .textFieldStyle(.plain)
+            .font(.system(size: 13, weight: changed ? .semibold : .regular, design: .monospaced))
+            .foregroundStyle(Theme.ink)
+            .padding(6)
+            .background(Theme.field, in: .rect(cornerRadius: 4))
+            .overlay { RoundedRectangle(cornerRadius: 4).strokeBorder(Theme.fieldBorder) }
+            .frame(width: CatalogColumns.proposed)
+            .onSubmit { commitTyping(tape.id) }
+            .disabled(model.isApplyingCatalog)
+            .accessibilityLabel("Proposed number for \(tape.tape.title)")
         }
-        .padding(.vertical, 2)
-        .listRowBackground(changed ? Theme.accent.opacity(0.08) : Color.clear)
+        .padding(.horizontal, CatalogColumns.inset)
+        .padding(.vertical, 9)
+        .background(changed ? Theme.picked : .clear)
+        .overlay(alignment: .bottom) { HairlineRule() }
     }
 
-    private var footer: some View {
-        HStack(spacing: 12) {
-            if let failure {
+    // MARK: Pending changes
+
+    private func pendingColumn(_ pending: [CatalogStaging.Pending]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            CapLabel("Pending changes")
+                .padding(.bottom, 6)
+            Text(pending.heading ?? "Nothing staged")
+                .font(Theme.serif(size.sectionTitle - 3))
+                .foregroundStyle(Theme.ink)
+                .lineLimit(2)
+                .accessibilityAddTraits(.isHeader)
+                .padding(.bottom, 14)
+
+            if !pending.isEmpty {
+                // The list scrolls only when it's too long, so Apply stays in view.
+                ViewThatFits(in: .vertical) {
+                    pendingList(pending)
+                    ScrollView { pendingList(pending) }
+                }
+                HairlineRule()
+                    .padding(.vertical, 16)
+                Text(pending.explanation)
+                    .font(.system(size: 13))
+                    .lineSpacing(3)
+                    .foregroundStyle(Theme.muted)
+                    .lineLimit(6)
+                    .layoutPriority(1)
+            }
+
+            if let failure = model.catalogFailure {
                 Text(failure)
-                    .font(.callout)
+                    .font(.system(size: 13))
                     .foregroundStyle(Theme.attention)
-                    .lineLimit(3)
+                    .lineLimit(7)
+                    .help(failure)
                     .textSelection(.enabled)
-            } else {
-                Text(summary)
-                    .font(.callout)
-                    .foregroundStyle(Theme.inkMuted)
-                    .lineLimit(2)
+                    .padding(.top, 12)
+                    .layoutPriority(1)
             }
-            Spacer()
-            if isApplying { ProgressView().controlSize(.small) }
-            Button("Revert") { reset() }
-                .fixedSize()
-                .disabled(changes.isEmpty || isApplying)
-            Button("Apply") {
-                commitAllTyping()
-                if !changes.isEmpty { confirming = true }
+
+            HStack(spacing: 9) {
+                Button(applyTitle(pending.count)) {
+                    commitAllTyping()
+                    if !model.catalogStaging.staged.isEmpty { confirming = true }
+                }
+                .buttonStyle(.paperPrimary)
+                .keyboardShortcut(.defaultAction)
+                .disabled((pending.isEmpty && typing.isEmpty) || model.isApplyingCatalog)
+                Button("Revert") {
+                    typing = [:]
+                    model.revertCatalog()
+                }
+                .buttonStyle(.paperStandard)
+                .disabled(pending.isEmpty || model.isApplyingCatalog)
+                if model.isApplyingCatalog {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Applying")
+                }
             }
-            .keyboardShortcut(.defaultAction)
-            .fixedSize()
-            .disabled((changes.isEmpty && typing.isEmpty) || isApplying)
+            .padding(.top, 16)
+            .layoutPriority(1)
         }
-        .padding(16)
+        // No spacer below, which would take half the room the list could have.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    // MARK: State
-
-    private var unnumbered: [ShelfTape] {
-        model.shelf.filter { $0.tape.catalogNumber == nil && !order.contains($0.id) }
+    /// Each changed reel, its two numbers and where it stands with the site.
+    private func pendingList(_ pending: [CatalogStaging.Pending]) -> some View {
+        let byID = Dictionary(uniqueKeysWithValues: model.shelf.map { ($0.id, $0) })
+        return VStack(alignment: .leading, spacing: 16) {
+            ForEach(pending) { change in
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(change.title)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(2)
+                        .help(change.title)
+                    HStack(spacing: 10) {
+                        Text(change.current ?? "No number")
+                        Spacer(minLength: 0)
+                        Text("→  \(change.proposed)")
+                    }
+                    .font(Theme.mono())
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(1)
+                    .padding(.vertical, 8)
+                    if let tape = byID[change.tapeID] {
+                        siteBadge(SitePresence(tape))
+                            .padding(.bottom, 8)
+                    }
+                    HairlineRule()
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var changes: [Renumbering] {
-        staged.compactMap { id, number in
-            guard let tape = byID[id], tape.tape.catalogNumber != number, !number.isEmpty else { return nil }
-            return Renumbering(tapeID: id, catalogNumber: number)
+    private func siteBadge(_ place: SitePresence) -> StatusBadge {
+        let tone: StatusBadge.Tone = switch place {
+        case .localOnly: .idle
+        case .draftOnSite: .draft
+        case .published: .published
+        }
+        return StatusBadge(text: place.label, tone: tone)
+    }
+
+    private func applyTitle(_ count: Int) -> String {
+        switch count {
+        case 0: "Apply…"
+        case 1: "Apply 1 change…"
+        default: "Apply \(count) changes…"
         }
     }
 
-    private var summary: String {
-        let count = changes.count
-        guard count > 0 else { return "\(order.count) reels numbered." }
-        let onSite = changes.filter { byID[$0.tapeID]?.tape.pushedAt != nil }.count
-        var text = "\(count) \(count == 1 ? "change" : "changes")"
-        if onSite > 0 { text += ", \(onSite) on the site" }
-        return text + "."
-    }
-
-    private var confirmMessage: String {
-        let published = changes.filter { byID[$0.tapeID].map(isPublished) ?? false }
-        let onSite = changes.filter { byID[$0.tapeID]?.tape.pushedAt != nil }
+    private func confirmMessage(_ pending: [CatalogStaging.Pending]) -> String {
+        let tapes = pending.compactMap { change in model.shelf.first { $0.id == change.tapeID } }
+        let published = tapes.filter { SiteSnapshot.decode($0.tape.siteSnapshot)?.published ?? false }
+        let onSite = tapes.filter { $0.tape.pushedAt != nil }
         var lines: [String] = []
         if !onSite.isEmpty { lines.append("\(onSite.count) of these \(onSite.count == 1 ? "is" : "are") on the site and \(onSite.count == 1 ? "moves" : "move") there too.") }
         if !published.isEmpty {
@@ -185,78 +332,54 @@ struct CatalogView: View {
         return lines.joined(separator: " ")
     }
 
-    private func status(of tape: ShelfTape) -> String {
-        if tape.tape.pushedAt == nil { return "Not pushed" }
-        return isPublished(tape) ? "Published" : "Draft"
-    }
+    // MARK: Typing
 
-    private func isPublished(_ tape: ShelfTape) -> Bool {
-        SiteSnapshot.decode(tape.tape.siteSnapshot)?.published ?? false
-    }
-
-    private func reset() {
-        staged = [:]
-        typing = [:]
-        failure = nil
-        order = model.shelf
-            .filter { $0.tape.catalogNumber != nil }
-            .sorted { (CatalogNumber.parse($0.tape.catalogNumber ?? "") ?? .max) < (CatalogNumber.parse($1.tape.catalogNumber ?? "") ?? .max) }
-            .map(\.id)
-    }
-
-    private func number(of id: Int64) -> String? {
-        staged[id] ?? byID[id]?.tape.catalogNumber
-    }
-
-    /// Moving a reel keeps the same set of numbers and deals them out in the new order,
-    /// so the reels between where it was and where it went each shift by one.
-    private func move(from source: IndexSet, to destination: Int) {
-        commitAllTyping()
-        let numbers = order.compactMap(number(of:)).sorted { (CatalogNumber.parse($0) ?? 0) < (CatalogNumber.parse($1) ?? 0) }
-        order.move(fromOffsets: source, toOffset: destination)
-        for (id, number) in zip(order, numbers) { stage(id, number) }
-        failure = nil
-    }
-
-    private func stage(_ id: Int64, _ number: String) {
-        if byID[id]?.tape.catalogNumber == number { staged[id] = nil } else { staged[id] = number }
-    }
-
-    private func commitTyping(_ tape: ShelfTape) {
-        guard let text = typing[tape.id] else { return }
-        typing[tape.id] = nil
-        if text.trimmingCharacters(in: .whitespaces).isEmpty { stage(tape.id, tape.tape.catalogNumber ?? ""); return }
-        guard let newNumber = CatalogNumber.normalized(text) else {
-            failure = "“\(text)” isn’t a catalog number. They look like RA-012."
-            return
-        }
-        failure = nil
-        stage(tape.id, newNumber)
-        if !order.contains(tape.id) { order.append(tape.id) }
-        order.sort { (CatalogNumber.parse(number(of: $0) ?? "") ?? .max) < (CatalogNumber.parse(number(of: $1) ?? "") ?? .max) }
+    private func commitTyping(_ id: Int64) {
+        guard let text = typing.removeValue(forKey: id) else { return }
+        model.typeCatalogNumber(text, for: id)
     }
 
     private func commitAllTyping() {
-        for id in typing.keys {
-            if let tape = byID[id] { commitTyping(tape) }
-        }
+        for id in typing.keys.sorted() { commitTyping(id) }
     }
+}
 
-    private func apply() {
-        let changes = changes
-        isApplying = true
-        failure = nil
-        Task {
-            do {
-                try await model.pushModel.renumber(changes)
-                reset()
-                model.message = changes.count == 1 ? "Renumbered 1 reel. Relabel its box." : "Renumbered \(changes.count) reels. Relabel their boxes."
-            } catch {
-                failure = error.localizedDescription
-                // Gone to another screen meanwhile, so it's said where it'll be seen.
-                if model.route != .catalog { model.message = error.localizedDescription }
-            }
-            isApplying = false
+/// The table's fixed column widths. The reel's title takes what's left.
+private enum CatalogColumns {
+    static let move: CGFloat = 30
+    static let current: CGFloat = 58
+    static let proposed: CGFloat = 78
+    static let spacing: CGFloat = 8
+    /// Space inside each row, at both ends.
+    static let inset: CGFloat = 6
+}
+
+private struct CatalogColumnNames: View {
+    var body: some View {
+        HStack(spacing: CatalogColumns.spacing) {
+            CapLabel("Move")
+                .fixedSize()
+                .frame(width: CatalogColumns.move, alignment: .leading)
+            CapLabel("Current")
+                .frame(width: CatalogColumns.current, alignment: .leading)
+            CapLabel("Reel")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            CapLabel("Proposed")
+                .frame(width: CatalogColumns.proposed, alignment: .leading)
         }
+        .padding(.horizontal, CatalogColumns.inset)
+        .padding(.vertical, 9)
+        .overlay(alignment: .bottom) { HairlineRule() }
+        // The rows are read out by what they hold.
+        .accessibilityHidden(true)
+    }
+}
+
+private extension View {
+    /// A row of the Catalog's list, which draws its own rules and spacing.
+    func catalogListRow() -> some View {
+        listRowInsets(EdgeInsets())
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
     }
 }

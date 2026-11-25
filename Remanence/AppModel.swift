@@ -113,6 +113,9 @@ final class AppModel {
         if route == .edit {
             return ["Edits apply to playback and site copies · Master preserved"]
         }
+        if route == .catalog, let note = catalogStaging.pending(in: shelf).footerNote {
+            return [note]
+        }
         return [footerNote ?? pipelineSummary]
     }
     /// More than the footer has room for, shown when the pointer rests on its note.
@@ -137,6 +140,12 @@ final class AppModel {
     private(set) var collections: [ShelfCollection] = []
     /// Every RA number the site is using, so new tapes never take one of them.
     var siteNumbers: Set<String> = []
+    /// New RA numbers lined up in the Catalog. Kept while other screens are used, and
+    /// never saved, so they're gone at Apply, Revert or quit.
+    private(set) var catalogStaging = CatalogStaging()
+    private(set) var isApplyingCatalog = false
+    /// Why a typed number or the last Apply was refused.
+    private(set) var catalogFailure: String?
     /// The collection shown instead of the shelf, if one is chosen in the sidebar.
     private(set) var selectedCollectionID: Int64? {
         didSet { if selectedCollectionID != oldValue { footerNote = nil } }
@@ -847,6 +856,7 @@ final class AppModel {
                 shelfStatuses = Dictionary(uniqueKeysWithValues: tapes.map { ($0.id, ShelfStatus($0)) })
                 shelf = tapes
                 hasLoadedShelf = true
+                followCatalog()
                 if let selectedTapeID, !tapes.contains(where: { $0.id == selectedTapeID }) {
                     self.selectedTapeID = nil
                     player.stop()
@@ -857,6 +867,64 @@ final class AppModel {
             message = "Your shelf couldn’t be loaded. \(error.localizedDescription)"
         }
         isObservingShelf = false
+    }
+
+    // MARK: Catalog
+
+    /// Brings the Catalog's list up to date with the shelf.
+    func followCatalog() {
+        var staging = catalogStaging
+        staging.follow(shelf)
+        guard staging != catalogStaging else { return }
+        // A refusal may have been about a change that's now gone.
+        if staging.staged != catalogStaging.staged { catalogFailure = nil }
+        catalogStaging = staging
+    }
+
+    /// Opening the Catalog with nothing staged starts it fresh.
+    func openCatalogList() {
+        followCatalog()
+        if catalogStaging.staged.isEmpty && !isApplyingCatalog { catalogFailure = nil }
+    }
+
+    func moveInCatalog(_ tapeIDs: [Int64], before: Int64?) {
+        guard !isApplyingCatalog else { return }
+        catalogStaging.move(tapeIDs, before: before, in: shelf)
+        catalogFailure = nil
+    }
+
+    func typeCatalogNumber(_ text: String, for tapeID: Int64) {
+        guard !isApplyingCatalog else { return }
+        switch catalogStaging.commitTyping(text, for: tapeID, in: shelf) {
+        case .restored: break
+        case .staged: catalogFailure = nil
+        case .refused(let reason): catalogFailure = reason
+        }
+    }
+
+    func revertCatalog() {
+        catalogStaging.reset(shelf)
+        catalogFailure = nil
+    }
+
+    /// Renumbers on the site first, then here. A refusal keeps what's staged.
+    func applyCatalog() {
+        let changes = catalogStaging.changes(in: shelf)
+        guard !changes.isEmpty, !isApplyingCatalog else { return }
+        isApplyingCatalog = true
+        catalogFailure = nil
+        Task {
+            do {
+                try await pushModel.renumber(changes)
+                revertCatalog()
+                message = changes.count == 1 ? "Renumbered 1 reel. Relabel its box." : "Renumbered \(changes.count) reels. Relabel their boxes."
+            } catch {
+                catalogFailure = error.localizedDescription
+                // Gone to another screen meanwhile, so it's said where it'll be seen.
+                if route != .catalog { message = error.localizedDescription }
+            }
+            isApplyingCatalog = false
+        }
     }
 
     // MARK: Collections
