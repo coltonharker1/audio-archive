@@ -758,6 +758,9 @@ private struct TrackColumn: View {
                 .padding(.bottom, 10)
             }
 
+            EditSelectedTrack()
+                .padding(.vertical, 12)
+
             if SideOptionsMenu.isOffered(for: tape, item: model.selectedItem) {
                 HairlineRule()
                 SideOptionsMenu(tape: tape)
@@ -773,6 +776,38 @@ private struct TrackColumn: View {
                 .fill(Theme.line)
                 .frame(width: 1)
                 .accessibilityHidden(true)
+        }
+    }
+}
+
+/// Opens the track under the playhead in Edit, at the same moment.
+private struct EditSelectedTrack: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if let selected = model.reviewModel.handoffTrack {
+            let name = selected.track.name.flatMap { $0.isEmpty ? nil : $0 } ?? "Track \(selected.number)"
+            let note = "Open “\(name)” at this position to adjust its trim, level or speed."
+            VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    endTyping()
+                    model.editSelectedTrack()
+                } label: {
+                    HStack(spacing: 8) {
+                        Text("Edit selected track")
+                        Image(systemName: "arrow.right")
+                            .accessibilityHidden(true)
+                    }
+                }
+                .buttonStyle(.paperPrimary)
+
+                Text(note)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.muted)
+                    .lineLimit(3)
+                    .help(note)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

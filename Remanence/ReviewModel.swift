@@ -44,8 +44,15 @@ final class ReviewModel {
     }
     /// The selected track, which is the one under the playhead.
     var selectedTrack: ReviewTrack? {
-        let time = player.currentTime
+        let time = player.currentTime + TrackHandoff.tolerance
         return review?.tracks.first { time >= $0.start && time < $0.end }
+    }
+    /// The track Edit would open from here, and its number: the selected one, or
+    /// the nearest while the playhead is in a trimmed-off end of the recording.
+    var handoffTrack: (number: Int, track: ReviewTrack)? {
+        let tracks = review?.tracks ?? []
+        return TrackHandoff.index(at: player.currentTime, starts: tracks.map(\.start))
+            .map { ($0 + 1, tracks[$0]) }
     }
     /// Whether there's enough loaded to show the screen.
     var isReady: Bool { review != nil && waveform != nil }
@@ -173,6 +180,12 @@ final class ReviewModel {
     func togglePlayback() {
         cancelHearing()
         player.togglePlayback()
+    }
+
+    /// Stops playing, along with a join still waiting to be heard.
+    func pause() {
+        cancelHearing()
+        player.pause()
     }
 
     // MARK: Hearing a join
@@ -404,7 +417,7 @@ final class ReviewModel {
             case "m": addMarkerAtPlayhead()
             case "h": hearJoin()
             case "j": seek(to: player.preciseTime - (large ? 30 : 5))
-            case "k": cancelHearing(); player.pause()
+            case "k": pause()
             case "l": player.isPlaying ? player.playFaster() : player.play()
             case ",": selectMarker(offset: -1)
             case ".": selectMarker(offset: 1)

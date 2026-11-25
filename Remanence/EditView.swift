@@ -812,6 +812,24 @@ private struct Inspector: View {
     private var edit: EditModel { model.editModel }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            settings
+            HairlineRule()
+            ReturnToSide()
+                .padding(.vertical, 12)
+        }
+        .padding(.leading, size == .regular ? 24 : 14)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(Theme.line)
+                .frame(width: 1)
+                .accessibilityHidden(true)
+        }
+    }
+
+    /// The part that scrolls, leaving the way back to Review in place under it.
+    private var settings: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 if let lane = edit.expandedLane {
@@ -840,14 +858,6 @@ private struct Inspector: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 14)
         }
-        .padding(.leading, size == .regular ? 24 : 14)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(Theme.line)
-                .frame(width: 1)
-                .accessibilityHidden(true)
-        }
     }
 
     private var rule: some View {
@@ -867,6 +877,32 @@ private struct Inspector: View {
                 .accessibilityAddTraits(.isHeader)
         }
         .padding(.bottom, 6)
+    }
+}
+
+/// Goes back to Review, on the recording and moment the playhead is at.
+private struct ReturnToSide: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        // The side of the piece it leaves from, which may not be the one it came in on.
+        let side = if let lane = model.editModel.departureLane {
+            lane.side
+        } else {
+            model.selectedItem?.source.side
+        }
+        Button {
+            model.editModel.endTyping()
+            model.returnToSide()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.left")
+                    .accessibilityHidden(true)
+                Text(TrackHandoff.returnTitle(side: side))
+            }
+        }
+        .buttonStyle(.paperStandard)
+        .help("Review this recording at the same moment")
     }
 }
 

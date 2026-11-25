@@ -86,13 +86,15 @@ final class AppModel {
             if oldValue.isTapeTab && !route.isTapeTab {
                 restoringPlayhead = nil
                 reviewModel.discardPendingZoom()
-                editModel.discardPendingRestore()
+                editModel.discardPendingPlace()
             }
         }
     }
     /// Where work last stopped, kept between launches.
     private var savedPosition: WorkPosition?
-    /// A playhead being resumed while its recording is still loading.
+    /// The zoom Review had on each recording when it was last left.
+    @ObservationIgnored private var leftReviewZooms: [Int64: (start: Double, span: Double)] = [:]
+    /// A playhead being put back while its recording is still loading.
     @ObservationIgnored private var restoringPlayhead: (sourceID: Int64, time: Double)?
     @ObservationIgnored private let positionKey: String
     /// What the screen showing wants said in the footer. Nil leaves the summary of
@@ -567,6 +569,7 @@ final class AppModel {
         }
 
         if tab == .review, let zoom = reviewModel.zoom(of: position.sourceID) {
+            leftReviewZooms[position.sourceID] = zoom
             position.zoomStart = zoom.start
             position.zoomSpan = zoom.span
         } else if let earlier, earlier.sourceID == position.sourceID {
@@ -600,16 +603,67 @@ final class AppModel {
             )
         }
         show(tab: Route(position.tab))
-        restoringPlayhead = (position.sourceID, position.playhead)
+        restorePlayhead(to: position.playhead, in: item, reloading: true)
+    }
 
+    /// Puts the playhead on a moment of the chosen recording, without playing,
+    /// loading the recording first when it's asked for.
+    private func restorePlayhead(to time: Double, in item: ShelfTape.Item, reloading: Bool) {
+        guard let sourceID = item.source.id else { return }
+        restoringPlayhead = (sourceID, time)
         Task {
-            await load(item, thenPlay: false)
+            if reloading { await load(item, thenPlay: false) }
             // Leaving the tape, or choosing another recording, calls this off.
-            guard let restoring = restoringPlayhead, restoring.sourceID == item.source.id,
+            guard let restoring = restoringPlayhead, restoring.sourceID == sourceID,
                   selectedItem?.source.id == restoring.sourceID else { return }
             if player.failure == nil { await player.seek(to: restoring.time) }
             restoringPlayhead = nil
         }
+    }
+
+    // MARK: Between Review and Edit
+
+    /// Opens Edit on the track under Review's playhead, at the same moment.
+    func editSelectedTrack() {
+        guard route == .review, let tape = selectedTape, let sourceID = selectedItem?.source.id else { return }
+        reviewModel.pause()
+        let restoring = restoringPlayhead.flatMap { $0.sourceID == sourceID ? $0.time : nil }
+        let place = TrackHandoff.Place(sourceID: sourceID, time: restoring ?? player.preciseTime)
+        rememberPosition()
+        editModel.arrive(tapeID: tape.id, at: place)
+        show(tab: .edit)
+    }
+
+    /// Goes back to Review on the recording and moment Edit is at, zoomed as
+    /// Review was.
+    func returnToSide() {
+        guard route == .edit, let tape = selectedTape else { return }
+        // Read first: leaving Edit clears its selection and stops its player.
+        guard let departure = editModel.departure,
+              let index = tape.items.firstIndex(where: { $0.source.id == departure.sourceID }) else {
+            switchTab(.review)
+            return
+        }
+        rememberPosition()
+
+        let item = tape.items[index]
+        let duration = item.source.duration
+        let zoom = leftReviewZooms[departure.sourceID] ?? reviewModel.zoom(of: departure.sourceID)
+        // With no zoom to go back to, Review's usual one goes around the moment.
+        let span = zoom?.span ?? min(90, max(ReviewModel.minimumSpan, duration))
+        let start = zoom?.start ?? departure.time - span / 2
+        reviewModel.restoreZoom(
+            sourceID: departure.sourceID,
+            start: TrackHandoff.zoomStart(start, span: span, showing: departure.time, duration: duration),
+            span: span
+        )
+
+        let url = try? library?.url(forLibraryPath: item.source.masterPath)
+        let isLoaded = player.failure == nil && player.currentURL != nil && player.currentURL == url
+        selectedItemIndex = index
+        player.pause()
+        show(tab: .review)
+        restorePlayhead(to: departure.time, in: item, reloading: !isLoaded)
     }
 
     // MARK: Keys

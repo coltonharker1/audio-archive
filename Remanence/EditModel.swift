@@ -63,6 +63,8 @@ final class EditModel {
     @ObservationIgnored private var isOnScreen = false
     /// A selection and playhead to take up once the tracks arrive.
     @ObservationIgnored private var pendingRestore: Restore?
+    /// A moment handed over from Review, to open once the tracks arrive.
+    @ObservationIgnored private var pendingArrival: (tapeID: Int64, place: TrackHandoff.Place)?
 
     private struct Restore {
         let tapeID: Int64
@@ -232,6 +234,11 @@ final class EditModel {
                     pendingRestore = nil
                     if restore.tapeID == tapeID { apply(restore) }
                 }
+                // Taken up once. Later updates leave the selection and playhead be.
+                if let arrival = pendingArrival, !lanes.isEmpty {
+                    pendingArrival = nil
+                    if arrival.tapeID == tapeID { open(arrival.place) }
+                }
                 if needsSelection, let first = lanes.first {
                     needsSelection = false
                     if expandedLane == nil {
@@ -271,7 +278,7 @@ final class EditModel {
 
     func leave() {
         isOnScreen = false
-        pendingRestore = nil
+        discardPendingPlace()
         expandedLaneID = nil
         for task in saveTasks.values { task.cancel() }
         flushSaves()
@@ -283,16 +290,19 @@ final class EditModel {
     /// Sets what to select, and where to put the playhead, when the screen next
     /// shows this tape.
     func restore(tapeID: Int64, trackID: String?, sourceID: Int64, time: Double) {
+        discardPendingPlace()
         pendingRestore = Restore(tapeID: tapeID, trackID: trackID, sourceID: sourceID, time: time)
     }
 
-    func discardPendingRestore() {
+    /// Drops anything still waiting for the tracks to arrive.
+    func discardPendingPlace() {
         pendingRestore = nil
+        pendingArrival = nil
     }
 
     /// Whether this tape's tracks are on screen, with nothing still to be restored.
     func isShowingTracks(of tapeID: Int64) -> Bool {
-        isOnScreen && pendingRestore == nil && tape?.id == tapeID && !lanes.isEmpty
+        isOnScreen && pendingRestore == nil && pendingArrival == nil && tape?.id == tapeID && !lanes.isEmpty
     }
 
     /// Where the loaded track's playhead is, in master seconds of its recording.
@@ -320,6 +330,44 @@ final class EditModel {
         }
         // Opened after the playhead is placed, so a long track zooms in around it.
         if let selected, expandedLaneID != selected.id { toggleExpanded(selected) }
+    }
+
+    // MARK: To and from Review
+
+    /// Sets the moment of a recording to open at when the screen next shows this
+    /// tape: its track is selected, with the playhead there.
+    func arrive(tapeID: Int64, at place: TrackHandoff.Place) {
+        discardPendingPlace()
+        pendingArrival = (tapeID, place)
+    }
+
+    /// Selects the track holding a moment and puts the playhead on it, without playing.
+    private func open(_ place: TrackHandoff.Place) {
+        guard let arrival = TrackHandoff.arrival(sourceID: place.sourceID, time: place.time, in: lanes.map(\.track)),
+              let lane = lanes.first(where: { $0.id == arrival.piece.id }) else { return }
+        if load(lane) { player.seek(to: arrival.time) }
+        // Opened after the playhead is placed, so a long track zooms in around it.
+        if expandedLaneID != lane.id { toggleExpanded(lane) }
+        follow(lane)
+    }
+
+    /// The piece a return to Review leaves from: the selected one, or the one
+    /// appended to it that the playhead has moved on to. With nothing selected,
+    /// it's the one holding the playhead.
+    var departureLane: Lane? {
+        let loaded = lanes.first { $0.id == player.trackKey }
+        guard let selected = expandedLane else { return loaded }
+        if let loaded, loaded.id == selected.id || loaded.head == selected.id { return loaded }
+        return selected
+    }
+
+    /// The moment a return to Review goes to. A piece without the playhead is
+    /// returned to where it starts playing. Read it before leaving the screen,
+    /// which lets go of the selection and the playhead.
+    var departure: TrackHandoff.Place? {
+        guard let lane = departureLane else { return nil }
+        let start = adjustments(for: lane).reversed ? lane.end : lane.start
+        return TrackHandoff.place(in: lane.track, at: player.trackKey == lane.id ? player.position : start)
     }
 
     // MARK: Zooming
