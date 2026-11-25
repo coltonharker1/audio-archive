@@ -42,6 +42,9 @@ enum Theme {
     static let needle = Color(hex: 0x9d4e35)
     static let eyebrow = Color(hex: 0x81533d)
 
+    /// Behind the words a search matched.
+    static let highlight = Color(hex: 0xe6cf9f)
+
     // Status dots. Never used for text: draft gold on paper is too faint to read.
     static let dotPublished = Color(hex: 0x61775d)
     static let dotDraft = Color(hex: 0x9e8054)
@@ -56,10 +59,7 @@ enum Theme {
     static let meterText = Color(hex: 0xf4efdc)
     static let meterDot = Color(hex: 0xde886c)
 
-    // Names from before the redesign, still used by screens not yet rebuilt.
-    static let inkMuted = muted
-    static let card = inset
-    static let board = hero
+    // Names from before the redesign that still have callers.
     static let accent = rust
     static let attention = rust
     static let good = dotPublished

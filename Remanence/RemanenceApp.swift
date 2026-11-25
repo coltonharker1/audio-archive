@@ -56,7 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let shift = modifiers == .shift
             let keyCode = event.keyCode
             let characters = event.charactersIgnoringModifiers ?? ""
-            nonisolated(unsafe) let window = event.window
+            let window = event.window
 
             if modifiers == .command || modifiers == [.command, .shift], characters.lowercased() == "z" {
                 let handled = MainActor.assumeIsolated {

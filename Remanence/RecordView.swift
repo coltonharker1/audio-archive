@@ -72,7 +72,7 @@ struct RecordView: View {
                 .font(Theme.display(28))
                 .foregroundStyle(Theme.ink)
             Text("macOS treats every audio input as a microphone, including your interface. Audio stays on this Mac.")
-                .foregroundStyle(Theme.inkMuted)
+                .foregroundStyle(Theme.muted)
                 .multilineTextAlignment(.center)
             Button("Open Privacy Settings") { record.openPrivacySettings() }
                 .buttonStyle(.paperPrimary)

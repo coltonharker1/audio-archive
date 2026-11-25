@@ -19,7 +19,7 @@ struct EditView: View {
                 VStack(spacing: 10) {
                     ProgressView()
                     Text("Opening the tracks…")
-                        .foregroundStyle(Theme.inkMuted)
+                        .foregroundStyle(Theme.muted)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -278,7 +278,7 @@ private struct LaneRow: View {
                             .font(.system(size: 13))
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
-                            .background(Theme.card, in: .rect(cornerRadius: 6))
+                            .background(Theme.inset, in: .rect(cornerRadius: 6))
                     }
                     .help("Drag between tracks to move it, or onto a track to append it to that track's end")
                     .accessibilityLabel("Drag \(lane.label) onto another track")

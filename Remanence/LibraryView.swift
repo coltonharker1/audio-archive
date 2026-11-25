@@ -348,10 +348,12 @@ private struct DropOverlay: View {
                 .padding(18)
             VStack(spacing: 6) {
                 Text("Drop to add to your shelf")
-                    .font(Theme.display(32))
+                    .font(Theme.serif(32))
+                    .tracking(-1)
                     .foregroundStyle(Theme.ink)
                 Text("A folder becomes one tape, with a track for each file.")
-                    .foregroundStyle(Theme.inkMuted)
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.muted)
             }
         }
         .allowsHitTesting(false)
@@ -360,20 +362,31 @@ private struct DropOverlay: View {
 
 private struct EmptyShelfView: View {
     @Environment(AppModel.self) private var model
+    /// The width of the detail area, which sets sizes.
+    @State private var width: CGFloat = 680
+
+    private var size: LayoutSize { LayoutSize(detailWidth: width) }
 
     var body: some View {
         VStack(spacing: 10) {
+            EyebrowLabel("Library")
             Text("Your shelf is empty")
-                .font(Theme.display(38))
+                .font(Theme.serif(size.pageTitle))
+                .tracking(size == .regular ? -1.9 : -1)
                 .foregroundStyle(Theme.ink)
+                .accessibilityAddTraits(.isHeader)
             Text("Drop audio here, or import your backup to bring your tapes home.")
-                .foregroundStyle(Theme.inkMuted)
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.muted)
+                .multilineTextAlignment(.center)
             Button("Import Backup…") { model.chooseBackupToImport() }
-                .controlSize(.large)
+                .buttonStyle(.paperPrimary)
                 .padding(.top, 8)
                 .disabled(model.importProgress != nil)
         }
+        .padding(.horizontal, 25)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 }
 
@@ -394,7 +407,7 @@ private struct ImportBanner: View {
             .font(.callout)
             .padding(.horizontal, 24)
             .padding(.vertical, 10)
-            .background(Theme.card)
+            .background(Theme.inset)
         }
     }
 }

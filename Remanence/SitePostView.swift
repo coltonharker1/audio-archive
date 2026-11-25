@@ -1016,7 +1016,7 @@ private struct ReferenceBox: View {
                 ScrollView {
                     Text(text)
                         .font(.system(size: 12))
-                        .foregroundStyle(Theme.inkMuted)
+                        .foregroundStyle(Theme.muted)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -1031,7 +1031,7 @@ private struct ReferenceBox: View {
         } label: {
             Text(title)
                 .font(.caption)
-                .foregroundStyle(Theme.inkMuted)
+                .foregroundStyle(Theme.muted)
         }
     }
 
@@ -1055,7 +1055,7 @@ struct Thumbnail: View {
 
     var body: some View {
         ZStack {
-            Theme.board
+            Theme.hero
             if let image {
                 Image(nsImage: image)
                     .resizable()

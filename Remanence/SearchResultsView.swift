@@ -4,7 +4,10 @@ import SwiftUI
 /// Every tape and moment matching the search. Choosing a moment plays it.
 struct SearchResultsView: View {
     @Environment(AppModel.self) private var model
+    /// The width of the detail area, which sets sizes.
+    @State private var width: CGFloat = 680
 
+    private var size: LayoutSize { LayoutSize(detailWidth: width) }
     private var results: [SearchTapeResult] { model.searchResults }
     private var momentCount: Int { results.reduce(0) { $0 + $1.moments.count } }
 
@@ -14,22 +17,19 @@ struct SearchResultsView: View {
         return "\(moments) on \(tapes)"
     }
 
+    /// Nothing is said until a first search has an answer.
+    private var subtitle: String? {
+        guard !model.isSearching || !results.isEmpty else { return nil }
+        return results.isEmpty ? "Nothing matches “\(model.searchText)”." : summary
+    }
+
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 26) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Search")
-                        .font(Theme.display(44))
-                        .foregroundStyle(Theme.ink)
-                    if !model.isSearching || !results.isEmpty {
-                        Text(results.isEmpty ? "Nothing matches “\(model.searchText)”." : summary)
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(Theme.inkMuted)
-                    }
-                }
+                PageHeader(eyebrow: "Library", title: "Search", subtitle: subtitle, size: size)
 
                 ForEach(results) { result in
-                    TapeResult(result: result)
+                    TapeResult(result: result, size: size)
                 }
             }
             .padding(.horizontal, 32)
@@ -39,6 +39,7 @@ struct SearchResultsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Theme.paper)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 }
 
@@ -46,6 +47,7 @@ private struct TapeResult: View {
     @Environment(AppModel.self) private var model
 
     let result: SearchTapeResult
+    let size: LayoutSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -54,12 +56,10 @@ private struct TapeResult: View {
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(result.title)
-                        .font(Theme.display(23))
+                        .font(Theme.serif(size.rowName))
                         .foregroundStyle(Theme.ink)
                         .multilineTextAlignment(.leading)
-                    Text(meta)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Theme.inkMuted)
+                    CapLabel(meta)
                 }
                 .contentShape(.rect)
             }
@@ -71,8 +71,8 @@ private struct TapeResult: View {
                 } label: {
                     HStack(alignment: .firstTextBaseline, spacing: 12) {
                         Label(TimeLabel.clock(moment.time), systemImage: "play.fill")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(Theme.accent)
+                            .font(Theme.mono(11))
+                            .foregroundStyle(Theme.rust)
                             .frame(width: 80, alignment: .trailing)
                         Text(highlighted(moment.snippet))
                             .font(Theme.serif(15))
@@ -121,7 +121,7 @@ private struct TapeResult: View {
     private func piece(_ text: Substring, isMatch: Bool) -> AttributedString {
         var piece = AttributedString(String(text))
         if isMatch {
-            piece.backgroundColor = Color(red: 0.902, green: 0.812, blue: 0.624)
+            piece.backgroundColor = Theme.highlight
         }
         return piece
     }

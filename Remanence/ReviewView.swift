@@ -55,7 +55,7 @@ struct ReviewView: View {
         VStack(spacing: 10) {
             ProgressView()
             Text("Reading the waveform…")
-                .foregroundStyle(Theme.inkMuted)
+                .foregroundStyle(Theme.muted)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -404,7 +404,7 @@ struct TimeRuler: View {
             ForEach(times, id: \.self) { time in
                 Text(TimeLabel.clock(time))
                     .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(Theme.inkMuted)
+                    .foregroundStyle(Theme.muted)
                     .fixedSize()
                     .offset(x: width * (time - start) / span + 3, y: 4)
             }

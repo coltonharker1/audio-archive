@@ -4,37 +4,42 @@ import SwiftUI
 
 struct SetupView: View {
     @Environment(AppModel.self) private var model
+    /// The width of the area it fills, which sets sizes.
+    @State private var width: CGFloat = 680
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Let’s get set up")
-                        .font(Theme.display(38))
-                        .foregroundStyle(Theme.ink)
-                    Text("Remanence needs a few tools to listen to your tapes.")
-                        .foregroundStyle(Theme.inkMuted)
-                }
+                PageHeader(
+                    eyebrow: "Setup",
+                    title: "Let’s get set up",
+                    subtitle: "Remanence needs a few tools to listen to your tapes.",
+                    size: LayoutSize(detailWidth: width)
+                )
 
                 VStack(spacing: 0) {
                     ForEach(model.requirements) { requirement in
                         RequirementRow(requirement: requirement)
                         if requirement.id != model.requirements.last?.id {
-                            Divider()
+                            HairlineRule()
+                                .padding(.horizontal, 14)
                         }
                     }
                 }
-                .background(Theme.card, in: .rect(cornerRadius: 10))
+                .background(Theme.inset, in: .rect(cornerRadius: 4))
 
                 HStack {
                     Spacer()
                     Button("Check Again") { Task { await model.refresh() } }
+                        .buttonStyle(.paperStandard)
                 }
             }
             .padding(32)
             .frame(maxWidth: 680)
             .frame(maxWidth: .infinity)
         }
+        .background(Theme.paper)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 }
 
@@ -51,11 +56,11 @@ private struct RequirementRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(requirement.name)
-                    .fontWeight(.medium)
+                    .font(Theme.serif(16))
                     .foregroundStyle(Theme.ink)
                 Text(detail)
-                    .font(.callout)
-                    .foregroundStyle(detailIsProblem ? Theme.attention : Theme.inkMuted)
+                    .font(.system(size: 12))
+                    .foregroundStyle(detailIsProblem ? Theme.attention : Theme.muted)
                     .textSelection(.enabled)
             }
 
@@ -76,7 +81,7 @@ private struct RequirementRow: View {
             ProgressView().controlSize(.small)
         default:
             Image(systemName: requirement.isOptional ? "circle.dashed" : "exclamationmark.circle.fill")
-                .foregroundStyle(requirement.isOptional ? Theme.inkMuted : Theme.attention)
+                .foregroundStyle(requirement.isOptional ? Theme.muted : Theme.attention)
                 .accessibilityLabel(requirement.isOptional ? "Optional, not installed" : "Needs attention")
         }
     }
@@ -107,16 +112,19 @@ private struct RequirementRow: View {
             case .model:
                 if let progress {
                     ProgressView(value: progress)
+                        .tint(Theme.rust)
                         .frame(width: 120)
                         .accessibilityLabel("Downloading")
                 } else {
                     Button("Download") { Task { await model.download(requirement) } }
+                        .buttonStyle(.paperSmall)
                 }
             case .tool(_, let installCommand):
                 Button("Copy Install Command") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(installCommand, forType: .string)
                 }
+                .buttonStyle(.paperSmall)
                 .help(installCommand)
             }
         }

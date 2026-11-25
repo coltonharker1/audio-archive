@@ -267,7 +267,7 @@ private struct LineRow: View {
     private var textColor: Color {
         switch position {
         case .current: Theme.ink
-        case .past: Theme.inkMuted.opacity(0.85)
+        case .past: Theme.muted.opacity(0.85)
         case .upcoming: Theme.ink.opacity(0.72)
         }
     }
@@ -531,7 +531,7 @@ struct CompareView: View {
                     .font(Theme.display(30))
                     .foregroundStyle(Theme.ink)
                 Text(subtitle)
-                    .foregroundStyle(Theme.inkMuted)
+                    .foregroundStyle(Theme.muted)
             }
             .padding(24)
 
@@ -646,7 +646,7 @@ private struct ChangeRow: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(name)
                 .font(.system(size: 11))
-                .foregroundStyle(Theme.inkMuted)
+                .foregroundStyle(Theme.muted)
             Text(sentence(changed))
                 .font(Theme.serif(15))
                 .foregroundStyle(Theme.ink)
@@ -655,7 +655,7 @@ private struct ChangeRow: View {
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.card, in: .rect(cornerRadius: 6))
+        .background(Theme.inset, in: .rect(cornerRadius: 6))
     }
 
     private func sentence(_ changed: String) -> AttributedString {
