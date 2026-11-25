@@ -47,6 +47,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Space and the arrow keys control playback everywhere except while typing.
     /// A plain button shortcut would catch the space bar inside text fields too.
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Closing the window takes its screens down, so the place is saved first.
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { AppModel.shared.rememberPosition() }
+        }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
             let shift = modifiers == .shift
@@ -140,6 +144,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Stops tools cleanly so nothing is left running and no attempts are used up.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Saved first, while the screens are still up.
+        AppModel.shared.rememberPosition()
         Task { @MainActor in
             await AppModel.shared.recordModel.stopForQuit()
             await AppModel.shared.shutDown()

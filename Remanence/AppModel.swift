@@ -29,6 +29,26 @@ enum Route: Equatable {
     }
 
     var isTapeTab: Bool { tabTitle != nil }
+
+    /// This screen as a saved position names it, or nil when it isn't one of a tape's.
+    var workTab: WorkPosition.Tab? {
+        switch self {
+        case .review: .review
+        case .edit: .edit
+        case .readAlong: .readAlong
+        case .post: .post
+        case .shelf, .search, .record, .catalog, .sitePosts, .setup: nil
+        }
+    }
+
+    init(_ tab: WorkPosition.Tab) {
+        switch tab {
+        case .review: self = .review
+        case .edit: self = .edit
+        case .readAlong: self = .readAlong
+        case .post: self = .post
+        }
+    }
 }
 
 @MainActor
@@ -60,8 +80,21 @@ final class AppModel {
     private(set) var jobProgress: [Int64: Double] = [:]
     private(set) var opensAtLogin = SMAppService.mainApp.status == .enabled
     private(set) var route = Route.shelf {
-        didSet { if route != oldValue { footerNote = nil } }
+        didSet {
+            if route != oldValue { footerNote = nil }
+            // What was waiting to be restored belongs to the visit just ended.
+            if oldValue.isTapeTab && !route.isTapeTab {
+                restoringPlayhead = nil
+                reviewModel.discardPendingZoom()
+                editModel.discardPendingRestore()
+            }
+        }
     }
+    /// Where work last stopped, kept between launches.
+    private var savedPosition: WorkPosition?
+    /// A playhead being resumed while its recording is still loading.
+    @ObservationIgnored private var restoringPlayhead: (sourceID: Int64, time: Double)?
+    @ObservationIgnored private let positionKey: String
     /// What the screen showing wants said in the footer. Nil leaves the summary of
     /// background work there. It's cleared on the way to another screen.
     var footerNote: String?
@@ -105,6 +138,14 @@ final class AppModel {
         }
         self.paths = paths
         if case .scratch = choice { usesScratchLibrary = true } else { usesScratchLibrary = false }
+        // A scratch library keeps its own place, leaving the real library's alone.
+        if case .scratch(let folder) = choice {
+            positionKey = "workPosition:\(folder.path)"
+        } else {
+            positionKey = "workPosition"
+        }
+        savedPosition = UserDefaults.standard.data(forKey: positionKey)
+            .flatMap { try? JSONDecoder().decode(WorkPosition.self, from: $0) }
         requirements = SetupCatalog.requirements(paths: paths)
         if case .unusable = choice {
             // Asking for a scratch library must never open the real one instead.
@@ -370,6 +411,7 @@ final class AppModel {
             message = "A push is running. Recording can start once it finishes."
             return
         }
+        rememberPosition()
         editModel.leave()
         // Recording from a collection records into it.
         if let selectedCollectionID, recordModel.recordingTapeID == nil {
@@ -422,6 +464,7 @@ final class AppModel {
     /// Moves between the tabs of the tape on screen. Back still leads where it did.
     func switchTab(_ tab: Route) {
         guard route.isTapeTab, tab.isTapeTab, tab != route else { return }
+        rememberPosition()
         show(tab: tab)
     }
 
@@ -447,6 +490,7 @@ final class AppModel {
     }
 
     func goBack() {
+        rememberPosition()
         if route == .edit { editModel.leave() }
         switch backDestination {
         case .results:
@@ -457,6 +501,89 @@ final class AppModel {
         case .shelf:
             selectedCollectionID = nil
             route = .shelf
+        }
+    }
+
+    // MARK: Resuming
+
+    /// The place Resume leads to, while its tape is still on the shelf.
+    var resumable: WorkPosition.Resolved? {
+        savedPosition?.resolved(in: shelf)
+    }
+
+    /// Saves where work is on the tape on screen, and does nothing anywhere else.
+    /// Call it before the route changes, since a screen that goes away lets go of
+    /// what it had selected.
+    func rememberPosition() {
+        guard let tab = route.workTab, let tape = selectedTape, let item = selectedItem,
+              let selectedSourceID = item.source.id else { return }
+        let earlier = savedPosition.flatMap { $0.tapeUUID == tape.tape.uuid ? $0 : nil }
+        // Edit that hasn't shown its tracks yet, or has already let go of them,
+        // has nothing newer to say.
+        if tab == .edit, !editModel.isShowingTracks(of: tape.id), earlier?.tab == .edit { return }
+
+        var position = WorkPosition(tapeUUID: tape.tape.uuid, tab: tab, sourceID: selectedSourceID, playhead: 0)
+        if let restoring = restoringPlayhead, restoring.sourceID == selectedSourceID {
+            position.playhead = restoring.time
+        } else if player.failure == nil, let url = player.currentURL,
+                  url == (try? library?.url(forLibraryPath: item.source.masterPath)) {
+            position.playhead = player.preciseTime
+        } else if let earlier, earlier.sourceID == selectedSourceID {
+            position.playhead = earlier.playhead
+        }
+
+        // Edit has a player of its own, which may be on another recording.
+        if tab == .edit, editModel.isShowingTracks(of: tape.id) {
+            if let loaded = editModel.loadedPosition {
+                position.sourceID = loaded.sourceID
+                position.playhead = loaded.time
+            }
+            position.editTrackID = editModel.expandedLaneID
+        }
+
+        if tab == .review, let zoom = reviewModel.zoom(of: position.sourceID) {
+            position.zoomStart = zoom.start
+            position.zoomSpan = zoom.span
+        } else if let earlier, earlier.sourceID == position.sourceID {
+            position.zoomStart = earlier.zoomStart
+            position.zoomSpan = earlier.zoomSpan
+        }
+
+        savedPosition = position
+        if let data = try? JSONEncoder().encode(position) {
+            UserDefaults.standard.set(data, forKey: positionKey)
+        }
+    }
+
+    /// Opens the last tape worked on where it was left, without starting playback.
+    func resume() {
+        guard let resumable else { return }
+        let position = resumable.position
+        let item = resumable.item
+        selectedTapeID = resumable.tape.id
+        selectedItemIndex = resumable.itemIndex
+        player.pause()
+        if let start = position.zoomStart, let span = position.zoomSpan {
+            reviewModel.restoreZoom(sourceID: position.sourceID, start: start, span: span)
+        }
+        if position.tab == .edit {
+            editModel.restore(
+                tapeID: resumable.tape.id,
+                trackID: position.editTrackID,
+                sourceID: position.sourceID,
+                time: position.playhead
+            )
+        }
+        show(tab: Route(position.tab))
+        restoringPlayhead = (position.sourceID, position.playhead)
+
+        Task {
+            await load(item, thenPlay: false)
+            // Leaving the tape, or choosing another recording, calls this off.
+            guard let restoring = restoringPlayhead, restoring.sourceID == item.source.id,
+                  selectedItem?.source.id == restoring.sourceID else { return }
+            if player.failure == nil { await player.seek(to: restoring.time) }
+            restoringPlayhead = nil
         }
     }
 
@@ -485,12 +612,14 @@ final class AppModel {
     }
 
     private func leaveToShelf() {
+        rememberPosition()
         route = .shelf
         searchText = ""
     }
 
     /// Goes to a library-wide screen, which no collection is part of.
     private func leave(to destination: Route) {
+        rememberPosition()
         selectedCollectionID = nil
         route = destination
         searchText = ""
@@ -498,6 +627,7 @@ final class AppModel {
 
     /// Changes track without starting playback.
     func choose(itemAt index: Int) {
+        restoringPlayhead = nil
         selectedItemIndex = index
         Task { await loadSelectedItem(thenPlay: false) }
     }
@@ -557,6 +687,7 @@ final class AppModel {
             return
         }
         if route != .search {
+            rememberPosition()
             routeBeforeSearch = route
             route = .search
         }

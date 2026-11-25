@@ -30,6 +30,9 @@ struct ShelfView: View {
 
     var body: some View {
         let columns = ShelfColumns(size)
+        let last = model.resumable
+        // Under the hero, the compact window gives up some space to keep the rows.
+        let isTight = last != nil && size == .compact
         VStack(alignment: .leading, spacing: 0) {
             // The header and the column names stay put while the rows scroll.
             VStack(alignment: .leading, spacing: 0) {
@@ -48,7 +51,12 @@ struct ShelfView: View {
                     }
                     .buttonStyle(.paperPrimary)
                 }
-                .padding(.bottom, 14)
+                .padding(.bottom, isTight ? 10 : 14)
+
+                if let last {
+                    LastOpened(resumable: last, size: size)
+                        .padding(.bottom, isTight ? 6 : 28)
+                }
 
                 ShelfTabs()
                     .padding(.bottom, 8)
@@ -58,7 +66,7 @@ struct ShelfView: View {
                 }
             }
             .padding(.horizontal, padding)
-            .padding(.top, 18)
+            .padding(.top, isTight ? 12 : 18)
 
             if tapes.isEmpty {
                 Text("Nothing here yet.")
@@ -70,7 +78,13 @@ struct ShelfView: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(tapes) { tape in
-                            ShelfRow(tape: tape, columns: columns, size: size)
+                            ShelfRow(
+                                tape: tape,
+                                columns: columns,
+                                size: size,
+                                isLastOpened: tape.id == last?.tape.id,
+                                verticalPadding: isTight ? 10 : 11
+                            )
                         }
                     }
                     .padding(.horizontal, padding)
@@ -83,6 +97,70 @@ struct ShelfView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .onChange(of: footerNote, initial: true) { _, note in model.footerNote = note }
+    }
+}
+
+/// The last tape worked on, with a way back to where it was left.
+private struct LastOpened: View {
+    @Environment(AppModel.self) private var model
+
+    let resumable: WorkPosition.Resolved
+    let size: LayoutSize
+
+    private var tape: ShelfTape { resumable.tape }
+
+    /// One scale for every format, so each keeps its size beside the others. The
+    /// largest box, at 196 points, just fits.
+    private var pictureScale: CGFloat { min(1, (size.heroHeight - 16) / 196) }
+
+    private var eyebrow: String {
+        ["Last opened", tape.tape.catalogNumber].compactMap(\.self).joined(separator: "  /  ")
+    }
+
+    private var details: String {
+        let medium = tape.tape.medium.map { SiteMedium(rawValue: $0)?.label ?? $0 }
+        return [model.collection(of: tape)?.collection.name, medium, TimeLabel.clock(tape.duration)]
+            .compactMap(\.self)
+            .joined(separator: "  ·  ")
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            TapeObject(tape: tape)
+                .scaleEffect(pictureScale)
+                .frame(width: size == .regular ? 300 : 180, height: size.heroHeight)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 0) {
+                EyebrowLabel(eyebrow)
+                Text(tape.tape.title)
+                    .font(Theme.serif(size.heroTitle))
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(size == .regular ? 2 : 1)
+                    .help(tape.tape.title)
+                    .padding(.vertical, 7)
+                    .accessibilityAddTraits(.isHeader)
+                Text(details)
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.muted)
+                    .lineLimit(1)
+                    .help(details)
+                HStack(spacing: 12) {
+                    Button("\(resumable.buttonTitle)  →") { model.resume() }
+                        .buttonStyle(.paperPrimary)
+                        .accessibilityLabel(resumable.buttonTitle)
+                    Text("at \(TimeLabel.clock(resumable.position.playhead))")
+                        .font(Theme.mono())
+                        .foregroundStyle(Theme.muted)
+                        .fixedSize()
+                }
+                .padding(.top, size == .regular ? 17 : 12)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, size == .regular ? 25 : 12)
+        .frame(height: size.heroHeight)
+        .background(Theme.hero, in: .rect(cornerRadius: 3))
     }
 }
 
@@ -185,6 +263,9 @@ private struct ShelfRow: View {
     let tape: ShelfTape
     let columns: ShelfColumns
     let size: LayoutSize
+    /// The tape the hero shows, whose row is marked too.
+    let isLastOpened: Bool
+    let verticalPadding: CGFloat
 
     private var isSelected: Bool { model.selectedTapeID == tape.id }
 
@@ -217,10 +298,10 @@ private struct ShelfRow: View {
                 status
             }
             .padding(.horizontal, columns.inset)
-            .padding(.vertical, 11)
+            .padding(.vertical, verticalPadding)
             HairlineRule()
         }
-        .background(isSelected ? Theme.picked : .clear)
+        .background(isSelected || isLastOpened ? Theme.picked : .clear)
         .contentShape(.rect)
         .draggable(TapeDrag.payload(tape.id)) {
             TapeObject(tape: tape).scaleEffect(0.6)

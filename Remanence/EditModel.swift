@@ -59,6 +59,18 @@ final class EditModel {
     private(set) var zoomSpan: Double = 0
     static let minimumZoomSpan: Double = 2
 
+    /// Whether the screen is up. `leave()` ends that.
+    @ObservationIgnored private var isOnScreen = false
+    /// A selection and playhead to take up once the tracks arrive.
+    @ObservationIgnored private var pendingRestore: Restore?
+
+    private struct Restore {
+        let tapeID: Int64
+        let trackID: String?
+        let sourceID: Int64
+        let time: Double
+    }
+
     /// Settings being changed and not yet saved, so dragging a slider stays smooth.
     @ObservationIgnored private var unsaved: [String: TrackAdjustments] = [:]
     @ObservationIgnored private var saveTasks: [String: Task<Void, Never>] = [:]
@@ -165,6 +177,7 @@ final class EditModel {
     var hasSides: Bool { Set(lanes.map(\.side)).count > 1 }
 
     func observe(tapeID: Int64) async {
+        isOnScreen = true
         tape = nil
         lanes = []
         measuredPeaks = [:]
@@ -209,6 +222,10 @@ final class EditModel {
                         )
                     }
                 }
+                if let restore = pendingRestore, !lanes.isEmpty {
+                    pendingRestore = nil
+                    if restore.tapeID == tapeID { apply(restore) }
+                }
                 // A split or a join changes the opened track's length, so the view refits.
                 if let id = expandedLaneID {
                     if lanes.contains(where: { $0.id == id }) { setZoom(span: zoomSpan) } else { expandedLaneID = nil }
@@ -241,10 +258,56 @@ final class EditModel {
     }
 
     func leave() {
+        isOnScreen = false
+        pendingRestore = nil
         expandedLaneID = nil
         for task in saveTasks.values { task.cancel() }
         flushSaves()
         player.stop()
+    }
+
+    // MARK: Restoring
+
+    /// Sets what to select, and where to put the playhead, when the screen next
+    /// shows this tape.
+    func restore(tapeID: Int64, trackID: String?, sourceID: Int64, time: Double) {
+        pendingRestore = Restore(tapeID: tapeID, trackID: trackID, sourceID: sourceID, time: time)
+    }
+
+    func discardPendingRestore() {
+        pendingRestore = nil
+    }
+
+    /// Whether this tape's tracks are on screen, with nothing still to be restored.
+    func isShowingTracks(of tapeID: Int64) -> Bool {
+        isOnScreen && pendingRestore == nil && tape?.id == tapeID && !lanes.isEmpty
+    }
+
+    /// Where the loaded track's playhead is, in master seconds of its recording.
+    var loadedPosition: (sourceID: Int64, time: Double)? {
+        guard let key = player.trackKey, let lane = lanes.first(where: { $0.id == key }) else { return nil }
+        return (lane.track.sourceID, player.position)
+    }
+
+    /// Selects the saved track and puts the playhead back, without playing. A
+    /// playhead outside the selected track is left alone. With nothing selected,
+    /// it goes to whichever track holds it.
+    private func apply(_ restore: Restore) {
+        func holdsPlayhead(_ lane: Lane) -> Bool {
+            lane.track.sourceID == restore.sourceID && restore.time >= lane.start && restore.time <= lane.end
+        }
+        let selected = lanes.first { $0.id == restore.trackID }
+        let playing = if let selected {
+            holdsPlayhead(selected) ? selected : nil
+        } else {
+            // On a boundary, the track starting there wins.
+            lanes.filter(holdsPlayhead).max { $0.start < $1.start }
+        }
+        if let playing, load(playing) {
+            player.seek(to: restore.time)
+        }
+        // Opened after the playhead is placed, so a long track zooms in around it.
+        if let selected, expandedLaneID != selected.id { toggleExpanded(selected) }
     }
 
     // MARK: Zooming

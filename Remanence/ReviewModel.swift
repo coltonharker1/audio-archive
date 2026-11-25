@@ -16,6 +16,8 @@ final class ReviewModel {
 
     @ObservationIgnored private let app: AppModel
     @ObservationIgnored private var hearTask: Task<Void, Never>?
+    /// A zoom to take up when its recording first arrives.
+    @ObservationIgnored private var pendingZoom: (sourceID: Int64, start: Double, span: Double)?
     @ObservationIgnored private var undoStack: [(name: String, action: UndoAction)] = []
     @ObservationIgnored private var redoStack: [(name: String, action: UndoAction)] = []
     @ObservationIgnored private var replay = Replay.none
@@ -26,7 +28,7 @@ final class ReviewModel {
     private typealias UndoAction = @MainActor (ReviewModel) async -> Void
     private enum Replay { case none, undoing, redoing }
 
-    static let minimumSpan: Double = 4
+    static let minimumSpan = WorkPosition.minimumZoomSpan
 
     init(app: AppModel) {
         self.app = app
@@ -54,8 +56,17 @@ final class ReviewModel {
                 let isFirst = review == nil
                 review = update
                 if isFirst, let update {
-                    zoomSpan = min(90, max(Self.minimumSpan, update.source.duration))
-                    showTime(player.currentTime, centered: true)
+                    // A restored zoom is used once, and one meant for another
+                    // recording is dropped.
+                    let restored = pendingZoom.flatMap { $0.sourceID == sourceID ? $0 : nil }
+                    pendingZoom = nil
+                    if let restored {
+                        zoomSpan = min(maximumSpan, max(Self.minimumSpan, restored.span))
+                        moveZoom(to: restored.start)
+                    } else {
+                        zoomSpan = min(90, max(Self.minimumSpan, update.source.duration))
+                        showTime(player.currentTime, centered: true)
+                    }
                 }
                 if waveform == nil, let path = update?.source.peaksPath {
                     waveform = try await library.loadWaveform(path: path)
@@ -69,6 +80,25 @@ final class ReviewModel {
         } catch {
             app.message = "This recording couldn’t be loaded for review. \(error.localizedDescription)"
         }
+    }
+
+    // MARK: Restoring
+
+    /// Sets the zoom to use when the screen next shows this recording.
+    func restoreZoom(sourceID: Int64, start: Double, span: Double) {
+        pendingZoom = (sourceID, start, span)
+    }
+
+    func discardPendingZoom() {
+        pendingZoom = nil
+    }
+
+    /// The zoom on a recording, or nil when this screen isn't showing it. One still
+    /// waiting to be restored counts.
+    func zoom(of sourceID: Int64) -> (start: Double, span: Double)? {
+        if let pendingZoom, pendingZoom.sourceID == sourceID { return (pendingZoom.start, pendingZoom.span) }
+        guard review?.source.id == sourceID else { return nil }
+        return (zoomStart, zoomSpan)
     }
 
     // MARK: Moving around
