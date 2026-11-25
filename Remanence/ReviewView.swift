@@ -156,15 +156,18 @@ private enum WaveformColors {
     static let selected = Theme.accent
 }
 
-/// Draws levels as mirrored bars in a rectangle.
+/// Draws levels as mirrored bars in a rectangle, with one fill for the bars inside
+/// the trims and one for those outside.
 private func drawLevels(
     _ levels: [Float],
     in size: CGSize,
     context: GraphicsContext,
-    color: (Int) -> Color
+    isKept: (Int) -> Bool
 ) {
     guard !levels.isEmpty else { return }
     let width = size.width / CGFloat(levels.count)
+    var kept = Path()
+    var trimmed = Path()
     for (index, level) in levels.enumerated() {
         let height = max(1, CGFloat(level) * size.height)
         let rect = CGRect(
@@ -173,8 +176,14 @@ private func drawLevels(
             width: max(0.5, width - 0.5),
             height: height
         )
-        context.fill(Path(rect), with: .color(color(index)))
+        if isKept(index) {
+            kept.addRect(rect)
+        } else {
+            trimmed.addRect(rect)
+        }
     }
+    context.fill(kept, with: .color(WaveformColors.kept))
+    context.fill(trimmed, with: .color(WaveformColors.trimmed))
 }
 
 /// The whole tape, with the zoomed stretch shown. Drag to move around.
@@ -199,10 +208,14 @@ private struct OverviewStrip: View {
                 ZStack(alignment: .topLeading) {
                     Canvas { context, size in
                         let columns = Waveform.columns(forWidth: min(size.width, width))
-                        let levels = waveform.levels(from: 0, to: duration, columns: columns, style: .average)
+                        // Cached, because playing, panning and zooming can all
+                        // redraw this without changing the whole side's levels.
+                        let levels = review.levelsCache.levels(
+                            of: waveform, from: 0, to: duration, columns: columns, style: .average
+                        )
                         drawLevels(levels, in: size, context: context) { index in
                             let time = duration * (Double(index) + 0.5) / Double(columns)
-                            return time >= trimStart && time <= trimEnd ? WaveformColors.kept : WaveformColors.trimmed
+                            return time >= trimStart && time <= trimEnd
                         }
                     }
 
@@ -333,11 +346,11 @@ private struct ZoomedWaveform: View {
             ZStack(alignment: .topLeading) {
                 Canvas { context, size in
                     let columns = Waveform.columns(forWidth: size.width)
-                    let levels = waveform.levels(from: start, to: start + span, columns: columns)
+                    let levels = review.levelsCache.levels(of: waveform, from: start, to: start + span, columns: columns)
                     // The padding below already leaves the flags their room.
                     drawLevels(levels, in: size, context: context) { index in
                         let time = start + span * (Double(index) + 0.5) / Double(columns)
-                        return time >= trimStart && time <= trimEnd ? WaveformColors.kept : WaveformColors.trimmed
+                        return time >= trimStart && time <= trimEnd
                     }
                 }
                 .padding(.top, Self.flagRoom)

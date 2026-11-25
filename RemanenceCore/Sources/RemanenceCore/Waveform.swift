@@ -16,7 +16,7 @@ public struct Waveform: Equatable, Sendable {
 
     /// How loud "quiet" is on this tape, taken from its own noise floor, because
     /// floors differ by over 15 dB between your tapes.
-    private let quietLevel: UInt8
+    let quietLevel: UInt8
 
     /// Stretches of quiet, in bins, worked out once when the waveform loads.
     private let quietRuns: [ClosedRange<Int>]
@@ -207,26 +207,51 @@ public struct Waveform: Equatable, Sendable {
         let floor = Float(quietLevel)
         let range = max(1, 255 - floor)
 
-        return (0..<columns).map { column in
-            let first = Int(start * Double(Self.binsPerSecond) + Double(column) * binsPerColumn)
-            let last = Int(start * Double(Self.binsPerSecond) + Double(column + 1) * binsPerColumn)
-            guard first >= 0, first < peaks.count else { return 0 }
-            let bins = first...min(max(first, last - 1), peaks.count - 1)
+        // Plain loops over raw buffers: the app is run as a Debug build, where
+        // iterating ranges is slow enough to make dragging stutter.
+        let source = style == .peak ? peaks : rms
+        let count = peaks.count
+        var result = [Float](repeating: 0, count: columns)
+        result.withUnsafeMutableBufferPointer { output in
+            source.withUnsafeBufferPointer { input in
+                var column = 0
+                while column < columns {
+                    let first = Int(start * Double(Self.binsPerSecond) + Double(column) * binsPerColumn)
+                    let last = Int(start * Double(Self.binsPerSecond) + Double(column + 1) * binsPerColumn)
+                    // A column outside the audio stays at zero.
+                    guard first >= 0, first < count else {
+                        column += 1
+                        continue
+                    }
+                    let end = min(max(first, last - 1), count - 1) + 1
+                    precondition(end <= input.count)
 
-            let value: Float
-            switch style {
-            case .peak:
-                var largest: UInt8 = 0
-                for index in bins where peaks[index] > largest { largest = peaks[index] }
-                value = Float(largest)
-            case .average:
-                var total = 0
-                for index in bins { total += Int(rms[index]) }
-                value = Float(total) / Float(bins.count)
+                    var index = first
+                    let value: Float
+                    switch style {
+                    case .peak:
+                        var largest: UInt8 = 0
+                        while index < end {
+                            let bin = input[index]
+                            if bin > largest { largest = bin }
+                            index += 1
+                        }
+                        value = Float(largest)
+                    case .average:
+                        var total = 0
+                        while index < end {
+                            total += Int(input[index])
+                            index += 1
+                        }
+                        value = Float(total) / Float(end - first)
+                    }
+                    let adjusted = min(255, value + Float(gainDB) * Self.stepsPerDecibel)
+                    output[column] = max(0.02, min(1, (adjusted - floor) / range))
+                    column += 1
+                }
             }
-            let adjusted = min(255, value + Float(gainDB) * Self.stepsPerDecibel)
-            return max(0.02, min(1, (adjusted - floor) / range))
         }
+        return result
     }
 
     /// Levels are stored from -70 dB at 0 to full scale at 255.

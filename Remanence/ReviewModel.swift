@@ -7,7 +7,11 @@ import RemanenceCore
 @Observable
 final class ReviewModel {
     private(set) var review: Review?
-    private(set) var waveform: Waveform?
+    private(set) var waveform: Waveform? {
+        didSet { levelsCache.removeAll() }
+    }
+    /// The levels last drawn from `waveform`, so redraws don't work them out again.
+    @ObservationIgnored let levelsCache = WaveformLevelsCache()
     private(set) var isHearingJoin = false
     private(set) var zoomStart: Double = 0
     private(set) var zoomSpan: Double = 90
