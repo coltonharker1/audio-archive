@@ -34,6 +34,9 @@ final class RecordModel {
     private(set) var nextSide = "B"
     /// The side just recorded, which can be recorded again.
     private(set) var lastRecordedSourceID: Int64?
+    /// True from Stop until the side is saved. Until then the side and next-side
+    /// values still describe the previous side, so nothing should act on them.
+    private(set) var isFinishing = false
     private(set) var isLarge = false
     private(set) var isListening = false
     private(set) var audioStalled = false
@@ -62,6 +65,8 @@ final class RecordModel {
     @ObservationIgnored private var restarts: [Date] = []
     @ObservationIgnored private var lastBufferCount = 0
     @ObservationIgnored private var lastBufferDate = Date()
+    /// Set when the screen is left while a side is still saving, so it closes after.
+    @ObservationIgnored private var closeWhenFinished = false
 
     init(app: AppModel) {
         self.app = app
@@ -82,6 +87,8 @@ final class RecordModel {
     // MARK: Opening and closing
 
     func open() async {
+        // Coming back before a side finished saving keeps the screen as it was.
+        closeWhenFinished = false
         guard !isListening else { return }
         guard await requestMicrophone() else {
             permissionDenied = true
@@ -112,6 +119,12 @@ final class RecordModel {
     /// click can never end a pass of a tape.
     func close() {
         guard !isRecording else { return }
+        // Resetting now would drop the side being saved and let a new take start
+        // under it, so closing waits until the save is done.
+        guard !isFinishing else {
+            closeWhenFinished = true
+            return
+        }
         monitor?.cancel()
         monitor = nil
         checkTask?.cancel()
@@ -270,7 +283,7 @@ final class RecordModel {
     // MARK: Recording
 
     func startRecording() async {
-        guard let library = app.library, isListening else { return }
+        guard let library = app.library, isListening, !isFinishing else { return }
         do {
             let target: CaptureTarget
             if let tapeID = recordingTapeID {
@@ -320,6 +333,8 @@ final class RecordModel {
 
     private func finish() async {
         askingIfFinished = false
+        isFinishing = true
+        lastRecordedSourceID = nil
         stage = .finished
         if capture.snapshot.seconds == 0 {
             app.message = "No audio arrived, so nothing was saved. Check your interface and cable, then try again."
@@ -335,7 +350,12 @@ final class RecordModel {
             lastRecordedSourceID = kept == nil ? nil : target.sourceID
             nextSide = (try? await library.nextSide(tapeID: target.tapeID)) ?? nextSide
         }
+        isFinishing = false
         target = nil
+        if closeWhenFinished {
+            closeWhenFinished = false
+            close()
+        }
         await app.resumePipeline()
     }
 
@@ -364,13 +384,14 @@ final class RecordModel {
     }
 
     func recordNextSide() async {
+        guard !isFinishing else { return }
         await startRecording()
     }
 
     /// Records the side just finished again from the start. The take being replaced
     /// goes to the Trash first, so it can still be got back from Finder.
     func reRecordLastSide() async {
-        guard stage == .finished, isListening, let sourceID = lastRecordedSourceID, let library = app.library else { return }
+        guard stage == .finished, !isFinishing, isListening, let sourceID = lastRecordedSourceID, let library = app.library else { return }
         // Processing starts as soon as a side finishes. Pausing puts it back in the
         // queue, so nothing is working on the take while it's removed.
         await app.suspendPipelineForRecording()
@@ -388,7 +409,7 @@ final class RecordModel {
     }
 
     func reviewRecording() {
-        guard let tapeID = recordingTapeID,
+        guard !isFinishing, let tapeID = recordingTapeID,
               let tape = app.shelf.first(where: { $0.id == tapeID }) else { return }
         close()
         app.openReview(tape)

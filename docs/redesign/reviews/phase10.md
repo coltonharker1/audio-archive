@@ -1,0 +1,5 @@
+1. **[blocking]** `Remanence/RecordView.swift:497` — `review()` opens `lastRecordedSourceID`. `RecordModel.finish()` sets `stage = .finished` at `Remanence/RecordModel.swift:323`, which is what shows "Review Side \(currentSide)", and assigns `lastRecordedSourceID` only after `finishCapture` returns (`Remanence/RecordModel.swift:335`). Until that hash finishes, a second side still holds the previous side's id, and a re-record has cleared it to nil. The new side's shelf row has existed since `beginNextSide`, with `source.side` already set, so an immediate "Review Side B" opens side A. The Re-record button at `Remanence/RecordView.swift:478` has the same window: the dialog names the take just made, and `reRecordLastSide()` deletes `lastRecordedSourceID`, which is still the earlier side.
+
+2. **[minor]** `Remanence/RecordView.swift:471` — "Record Side \(nextSide)" stays on the old letter through that same wait. After side B stops, the label still reads "Record Side B" until `finish()` updates `nextSide`. `recordNextSide()` asks the library for the next free letter, so the file itself is the following side.
+
+VERDICT: CHANGES
