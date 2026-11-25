@@ -188,51 +188,56 @@ private struct OverviewStrip: View {
     var body: some View {
         GeometryReader { geometry in
             let width = geometry.size.width
-            let duration = max(review.duration, 0.001)
+            // The strip is built once more after the review is cleared for a reload,
+            // so the length then comes from the waveform being drawn. A stand-in
+            // near zero would make the zoom box millions of points wide.
+            let duration = review.duration > 0 ? review.duration : waveform.duration
             let trimStart = review.review?.trimStart ?? 0
             let trimEnd = review.review?.trimEnd ?? duration
 
-            ZStack(alignment: .topLeading) {
-                Canvas { context, size in
-                    let columns = max(1, Int(size.width / 2))
-                    let levels = waveform.levels(from: 0, to: duration, columns: columns, style: .average)
-                    drawLevels(levels, in: size, context: context) { index in
-                        let time = duration * (Double(index) + 0.5) / Double(columns)
-                        return time >= trimStart && time <= trimEnd ? WaveformColors.kept : WaveformColors.trimmed
+            if duration > 0 {
+                ZStack(alignment: .topLeading) {
+                    Canvas { context, size in
+                        let columns = Waveform.columns(forWidth: min(size.width, width))
+                        let levels = waveform.levels(from: 0, to: duration, columns: columns, style: .average)
+                        drawLevels(levels, in: size, context: context) { index in
+                            let time = duration * (Double(index) + 0.5) / Double(columns)
+                            return time >= trimStart && time <= trimEnd ? WaveformColors.kept : WaveformColors.trimmed
+                        }
                     }
-                }
 
-                Rectangle()
-                    .fill(Theme.accent.opacity(0.14))
-                    .overlay(Rectangle().strokeBorder(Theme.accent.opacity(0.8), lineWidth: 1))
-                    .frame(
-                        width: max(4, width * review.zoomSpan / duration),
-                        height: geometry.size.height
-                    )
-                    .offset(x: width * review.zoomStart / duration)
-
-                ForEach(review.review?.markers ?? []) { marker in
                     Rectangle()
-                        .fill(marker.id == review.selectedMarkerID ? WaveformColors.selected : Theme.ink)
-                        .frame(width: 2, height: geometry.size.height)
-                        .offset(x: width * marker.time / duration)
-                }
+                        .fill(Theme.accent.opacity(0.14))
+                        .overlay(Rectangle().strokeBorder(Theme.accent.opacity(0.8), lineWidth: 1))
+                        .frame(
+                            width: Waveform.markerWidth(of: review.zoomSpan, in: duration, stripWidth: width),
+                            height: geometry.size.height
+                        )
+                        .offset(x: width * review.zoomStart / duration)
 
-                PlayheadLine(duration: duration, start: 0, span: duration, width: width, height: geometry.size.height)
-            }
-            .contentShape(.rect)
-            .gesture(
-                DragGesture(minimumDistance: 0).onChanged { value in
-                    if value.translation == .zero { endTyping() }
-                    let time = max(0, min(duration, duration * value.location.x / width))
-                    review.moveZoom(to: time - review.zoomSpan / 2)
-                    review.scrub(to: time)
+                    ForEach(review.review?.markers ?? []) { marker in
+                        Rectangle()
+                            .fill(marker.id == review.selectedMarkerID ? WaveformColors.selected : Theme.ink)
+                            .frame(width: 2, height: geometry.size.height)
+                            .offset(x: width * marker.time / duration)
+                    }
+
+                    PlayheadLine(duration: duration, start: 0, span: duration, width: width, height: geometry.size.height)
                 }
-                .onEnded { _ in review.endScrub() }
-            )
-            .accessibilityElement()
-            .accessibilityLabel("Whole tape")
-            .accessibilityValue("Playing at \(TimeLabel.clock(model.player.currentTime)) of \(TimeLabel.clock(duration))")
+                .contentShape(.rect)
+                .gesture(
+                    DragGesture(minimumDistance: 0).onChanged { value in
+                        if value.translation == .zero { endTyping() }
+                        let time = max(0, min(duration, duration * value.location.x / width))
+                        review.moveZoom(to: time - review.zoomSpan / 2)
+                        review.scrub(to: time)
+                    }
+                    .onEnded { _ in review.endScrub() }
+                )
+                .accessibilityElement()
+                .accessibilityLabel("Whole tape")
+                .accessibilityValue("Playing at \(TimeLabel.clock(model.player.currentTime)) of \(TimeLabel.clock(duration))")
+            }
         }
         .scopeBackground()
     }
@@ -327,7 +332,7 @@ private struct ZoomedWaveform: View {
 
             ZStack(alignment: .topLeading) {
                 Canvas { context, size in
-                    let columns = max(1, Int(size.width / 2))
+                    let columns = Waveform.columns(forWidth: size.width)
                     let levels = waveform.levels(from: start, to: start + span, columns: columns)
                     // The padding below already leaves the flags their room.
                     drawLevels(levels, in: size, context: context) { index in

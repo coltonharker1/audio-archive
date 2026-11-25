@@ -403,7 +403,7 @@ private struct LaneWaveform: View {
             ZStack(alignment: .topLeading) {
                 Canvas { context, size in
                     guard let waveform = edit.waveforms[lane.track.sourceID] else { return }
-                    let columns = max(1, Int(size.width / 2))
+                    let columns = Waveform.columns(forWidth: size.width)
                     var levels = waveform.levels(from: lane.spanStart, to: lane.spanEnd, columns: columns, gainDB: settings.gainDB)
                     if settings.reversed { levels.reverse() }
                     let width = size.width / CGFloat(max(1, levels.count))
@@ -638,7 +638,7 @@ private struct CloseUp: View {
             let span = max(0.001, edit.zoomSpan)
             ZStack(alignment: .topLeading) {
                 Canvas { context, size in
-                    draw(levels(from: start, span: span, columns: max(1, Int(size.width / 2))), in: size, context: context)
+                    draw(levels(from: start, span: span, columns: Waveform.columns(forWidth: size.width)), in: size, context: context)
                 }
                 TrimOverlay(lane: lane, windowStart: start, windowSpan: span)
                 playheadLine(start: start, span: span, width: width, height: geometry.size.height)

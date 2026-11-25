@@ -267,6 +267,11 @@ Approach: move each canvas into its own small view whose inputs are plain values
 zoom rectangle, markers and playhead stay as overlays beside it. Do Review first, then
 Edit's `LaneWaveform` and `CloseUp`, as two separate changes.
 
+Also (plan review finding 3, noted during phase 1, not yet changed): `OverviewStrip.body`
+reads `player.currentTime` in its accessibility value, so playback rebuilds the whole strip,
+canvas included, every 0.25 s. Moving the canvas into its own view must leave that read
+outside it.
+
 Tests: no Core surface. Check by profile.
 
 Acceptance: panning the Review close-up, and zooming the Edit close-up with eight

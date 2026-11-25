@@ -174,13 +174,35 @@ public struct Waveform: Equatable, Sendable {
         case average
     }
 
+    /// The most columns ever worked out or drawn at once. No real window is wide
+    /// enough to reach it, so it only limits the damage a broken layout can do.
+    public static let maximumColumns = 4096
+
+    /// How many columns, two points apart, to draw across a width: at least one and
+    /// never more than `maximumColumns`.
+    public static func columns(forWidth width: Double) -> Int {
+        let half = width / 2
+        guard half > 1 else { return 1 }
+        return Int(min(half, Double(maximumColumns)))
+    }
+
+    /// The width of the box marking a stretch of the tape on a strip showing all of
+    /// it: wide enough to see, but never wider than the strip, which would stretch
+    /// everything laid out with it.
+    public static func markerWidth(of span: Double, in duration: Double, stripWidth: Double) -> Double {
+        guard duration > 0 else { return 0 }
+        return max(0, min(stripWidth, max(4, stripWidth * span / duration)))
+    }
+
     /// Levels from 0 to 1 for drawing a stretch of the tape in a given number of
     /// columns, scaled against this tape's noise floor so hiss sits near zero and
     /// gaps are easy to see.
     ///
     /// `gainDB` draws it as it will sound with a level change, against the same floor.
+    /// No more than `maximumColumns` are returned, however many are asked for.
     public func levels(from start: Double, to end: Double, columns: Int, style: Style = .peak, gainDB: Double = 0) -> [Float] {
         guard columns > 0, end > start, !peaks.isEmpty else { return [] }
+        let columns = min(columns, Self.maximumColumns)
         let binsPerColumn = (end - start) * Double(Self.binsPerSecond) / Double(columns)
         let floor = Float(quietLevel)
         let range = max(1, 255 - floor)
