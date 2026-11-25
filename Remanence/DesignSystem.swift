@@ -258,28 +258,25 @@ struct KeyValueRow: View {
     }
 }
 
-/// Number, serif name, a small line under it, and the duration.
-struct NumberedTrackRow: View {
+/// Number, serif name, a small line under it, and the duration. The name is the
+/// caller's view, so it can be edited in place.
+struct NumberedTrackRow<Name: View>: View {
     let number: String
-    let name: String
     var detail: String?
     let duration: String
     var size: LayoutSize = .compact
     var isPicked = false
+    @ViewBuilder var name: Name
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
+            HStack(spacing: size == .regular ? 12 : 8) {
                 Text(number)
                     .font(Theme.mono())
                     .foregroundStyle(Theme.muted)
-                    .frame(width: 31, alignment: .leading)
+                    .frame(width: size == .regular ? 31 : 20, alignment: .leading)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(name)
-                        .font(Theme.serif(size.rowName))
-                        .foregroundStyle(Theme.ink)
-                        .lineLimit(1)
-                        .help(name)
+                    name
                     if let detail {
                         Text(detail)
                             .font(.system(size: 12))
@@ -293,12 +290,12 @@ struct NumberedTrackRow: View {
                     .foregroundStyle(Theme.ink)
                     .fixedSize()
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 12)
+            .padding(.horizontal, size == .regular ? 10 : 7)
+            .padding(.vertical, size == .regular ? 12 : 9)
             HairlineRule()
         }
         .background(isPicked ? Theme.picked : .clear)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityAddTraits(isPicked ? .isSelected : [])
     }
 }
@@ -306,9 +303,11 @@ struct NumberedTrackRow: View {
 /// The mocks' two buttons: dark for a screen's main action, pale for the rest.
 struct PaperButtonStyle: ButtonStyle {
     var isPrimary = false
+    /// Tighter, for rows of controls under a waveform.
+    var isSmall = false
 
     func makeBody(configuration: Configuration) -> some View {
-        Face(configuration: configuration, isPrimary: isPrimary)
+        Face(configuration: configuration, isPrimary: isPrimary, isSmall: isSmall)
     }
 
     /// A view of its own, so it can read whether the button is enabled.
@@ -317,14 +316,15 @@ struct PaperButtonStyle: ButtonStyle {
 
         let configuration: Configuration
         let isPrimary: Bool
+        let isSmall: Bool
 
         var body: some View {
             configuration.label
-                .font(.system(size: 13))
+                .font(.system(size: isSmall ? 12 : 13))
                 .foregroundStyle(isPrimary ? Theme.primaryText : Theme.ink)
                 .fixedSize()
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.horizontal, isSmall ? 9 : 12)
+                .padding(.vertical, isSmall ? 4 : 8)
                 .background(isPrimary ? Theme.primary : Theme.button, in: .rect(cornerRadius: 6))
                 .overlay {
                     RoundedRectangle(cornerRadius: 6)
@@ -339,6 +339,7 @@ struct PaperButtonStyle: ButtonStyle {
 extension ButtonStyle where Self == PaperButtonStyle {
     static var paperPrimary: PaperButtonStyle { PaperButtonStyle(isPrimary: true) }
     static var paperStandard: PaperButtonStyle { PaperButtonStyle() }
+    static var paperSmall: PaperButtonStyle { PaperButtonStyle(isSmall: true) }
 }
 
 extension View {

@@ -6,7 +6,7 @@ struct StatusBar: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        let note = model.footerNote ?? model.pipelineSummary
+        let wordings = model.footerWordings
         HStack(spacing: 9) {
             Circle()
                 .fill(Theme.dotIdle)
@@ -14,10 +14,15 @@ struct StatusBar: View {
                 .accessibilityHidden(true)
             Text(model.usesScratchLibrary ? "Scratch library" : "Local library")
                 .fixedSize()
-            Spacer(minLength: 16)
-            Text(note)
-                .lineLimit(1)
-                .help(note)
+            ViewThatFits(in: .horizontal) {
+                ForEach(wordings, id: \.self) { wording in
+                    Text(wording)
+                        .lineLimit(1)
+                }
+            }
+            .help(model.footerHelp ?? wordings.first ?? "")
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.leading, 7)
         }
         .font(.system(size: 11))
         .foregroundStyle(Theme.muted)

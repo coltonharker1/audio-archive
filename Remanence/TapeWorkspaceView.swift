@@ -5,12 +5,20 @@ import SwiftUI
 struct TapeWorkspaceView: View {
     @Environment(AppModel.self) private var model
     @State private var size = LayoutSize.compact
+    /// Whether Review's track column is showing.
+    @State private var showsReviewTracks = true
 
     let tape: ShelfTape
 
+    /// Review's track column holds Side options at its foot, so the header only
+    /// offers them while that column isn't on screen.
+    private var showsSideOptionsInHeader: Bool {
+        !(model.route == .review && showsReviewTracks && model.reviewModel.isReady)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            TapeHeader(tape: tape, size: size)
+            TapeHeader(tape: tape, size: size, showsSideOptions: showsSideOptionsInHeader)
             // Only the tab showing is in the view tree, because screens save what was
             // typed in them as they leave it.
             tab
@@ -27,7 +35,7 @@ struct TapeWorkspaceView: View {
 
     @ViewBuilder private var tab: some View {
         switch model.route {
-        case .review: ReviewView()
+        case .review: ReviewView(showsTracks: $showsReviewTracks, size: size)
         case .edit: EditView(tape: tape)
         case .readAlong: ReadAlongView(tape: tape)
         case .post: SitePostView(tape: tape)
@@ -42,6 +50,7 @@ private struct TapeHeader: View {
 
     let tape: ShelfTape
     let size: LayoutSize
+    let showsSideOptions: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -109,7 +118,9 @@ private struct TapeHeader: View {
                 .font(Theme.mono())
                 .fixedSize()
             Spacer(minLength: 8)
-            SideOptionsMenu(tape: tape)
+            if showsSideOptions {
+                SideOptionsMenu(tape: tape)
+            }
         }
         .font(.system(size: 14))
         .foregroundStyle(Theme.muted)
@@ -183,7 +194,7 @@ private struct SideSwitcher: View {
 
 /// Renaming and deleting the chosen recording. Only offered while the tape isn't on
 /// the site.
-private struct SideOptionsMenu: View {
+struct SideOptionsMenu: View {
     @Environment(AppModel.self) private var model
     @State private var deleting: SideAction?
     @State private var renaming: SideAction?
@@ -191,51 +202,53 @@ private struct SideOptionsMenu: View {
 
     let tape: ShelfTape
 
+    /// A tape's only recording can be renamed once it has a side name, and never
+    /// deleted from here.
+    static func isOffered(for tape: ShelfTape, item: ShelfTape.Item?) -> Bool {
+        guard tape.tape.pushedAt == nil, let item else { return false }
+        return tape.items.count > 1 || item.source.side != nil
+    }
+
     var body: some View {
-        if tape.tape.pushedAt == nil, let item = model.selectedItem {
-            let hasOtherSides = tape.items.count > 1
-            // A tape's only recording can be renamed once it has a side name, and
-            // never deleted from here.
-            if hasOtherSides || item.source.side != nil {
-                Menu("Side options") {
-                    Button("Rename Side…") {
-                        newSideName = item.source.side ?? ""
-                        renaming = SideAction(tape: tape, item: item)
-                    }
-                    if hasOtherSides {
-                        Button("Delete Side…", role: .destructive) {
-                            deleting = SideAction(tape: tape, item: item)
-                        }
+        if let item = model.selectedItem, Self.isOffered(for: tape, item: item) {
+            Menu("Side options") {
+                Button("Rename Side…") {
+                    newSideName = item.source.side ?? ""
+                    renaming = SideAction(tape: tape, item: item)
+                }
+                if tape.items.count > 1 {
+                    Button("Delete Side…", role: .destructive) {
+                        deleting = SideAction(tape: tape, item: item)
                     }
                 }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .confirmationDialog(
-                    deleting.map { "Delete \($0.item.name)?" } ?? "",
-                    isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
-                    titleVisibility: .visible,
-                    presenting: deleting
-                ) { action in
-                    Button("Delete", role: .destructive) {
-                        Task { await model.removeSide(action.item, of: action.tape) }
-                    }
-                } message: { _ in
-                    Text("Its audio moves to the Trash, and its transcript and track markers are removed. The sides after it move up.")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .confirmationDialog(
+                deleting.map { "Delete \($0.item.name)?" } ?? "",
+                isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                titleVisibility: .visible,
+                presenting: deleting
+            ) { action in
+                Button("Delete", role: .destructive) {
+                    Task { await model.removeSide(action.item, of: action.tape) }
                 }
-                .alert(
-                    "Rename Side",
-                    isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }),
-                    presenting: renaming
-                ) { action in
-                    TextField("Side", text: $newSideName)
-                    Button("Rename") {
-                        let name = newSideName
-                        Task { await model.renameSide(action.item, to: name) }
-                    }
-                    Button("Cancel", role: .cancel) {}
-                } message: { action in
-                    Text("A new name for \(action.item.name), like B.")
+            } message: { _ in
+                Text("Its audio moves to the Trash, and its transcript and track markers are removed. The sides after it move up.")
+            }
+            .alert(
+                "Rename Side",
+                isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }),
+                presenting: renaming
+            ) { action in
+                TextField("Side", text: $newSideName)
+                Button("Rename") {
+                    let name = newSideName
+                    Task { await model.renameSide(action.item, to: name) }
                 }
+                Button("Cancel", role: .cancel) {}
+            } message: { action in
+                Text("A new name for \(action.item.name), like B.")
             }
         }
     }

@@ -98,6 +98,24 @@ final class AppModel {
     /// What the screen showing wants said in the footer. Nil leaves the summary of
     /// background work there. It's cleared on the way to another screen.
     var footerNote: String?
+    /// The footer's note, longest wording first. The footer shows the first that fits.
+    var footerWordings: [String] {
+        // Review's note is its keys, which are the same for every tape.
+        if route == .review {
+            return [
+                "Space Play / pause · J K L Shuttle · M Add marker",
+                "Space Play / pause · M Add marker",
+                "M Add marker",
+            ]
+        }
+        return [footerNote ?? pipelineSummary]
+    }
+    /// More than the footer has room for, shown when the pointer rests on its note.
+    var footerHelp: String? {
+        guard route == .review else { return nil }
+        return "Space Play / pause · M Add marker · H Hear the join · ← → Nudge · , . Previous or next marker"
+            + " · J K L Shuttle · - = Zoom · I O Trim the side · ⌘Z Undo"
+    }
     private(set) var searchResults: [SearchTapeResult] = []
     private(set) var isSearching = false
     var searchRequested = false

@@ -42,6 +42,19 @@ final class ReviewModel {
     var selectedMarker: Marker? {
         review?.markers.first { $0.id == selectedMarkerID }
     }
+    /// The selected track, which is the one under the playhead.
+    var selectedTrack: ReviewTrack? {
+        let time = player.currentTime
+        return review?.tracks.first { time >= $0.start && time < $0.end }
+    }
+    /// Whether there's enough loaded to show the screen.
+    var isReady: Bool { review != nil && waveform != nil }
+
+    /// The number of the track a marker starts, counting from 1.
+    func trackNumber(startingAt marker: Marker) -> Int? {
+        guard let id = marker.id else { return nil }
+        return review?.tracks.firstIndex { $0.markerID == id }.map { $0 + 1 }
+    }
 
     func observe(sourceID: Int64) async {
         review = nil

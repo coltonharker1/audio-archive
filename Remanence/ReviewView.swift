@@ -4,26 +4,33 @@ import SwiftUI
 /// Where you mark what's on a tape: scrub the waveform, place markers, name tracks.
 struct ReviewView: View {
     @Environment(AppModel.self) private var model
-    @State private var showsTracks = true
+
+    @Binding var showsTracks: Bool
+    let size: LayoutSize
 
     private var review: ReviewModel { model.reviewModel }
     private var sourceID: Int64? { model.selectedItem?.source.id }
 
+    /// The close-up takes whatever height is left, but never less than this.
+    private static let minimumCloseUp: CGFloat = 110
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if review.review != nil, let waveform = review.waveform {
-                VStack(alignment: .leading, spacing: 10) {
-                    OverviewStrip(waveform: waveform)
-                        .frame(height: 58)
-                    ZoomedWaveform(waveform: waveform)
-                        .frame(minHeight: 170, maxHeight: .infinity)
-                    controls
-                    MarkerControls()
-                    KeyHints()
+        Group {
+            if review.isReady, let waveform = review.waveform {
+                HStack(alignment: .top, spacing: size == .regular ? 28 : 16) {
+                    // Scrolls only when the window is too short for all of it.
+                    ViewThatFits(in: .vertical) {
+                        side(waveform)
+                        ScrollView { side(waveform) }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
+                    if showsTracks, let tape = model.selectedTape {
+                        TrackColumn(tape: tape, size: size)
+                            .frame(width: size.rightColumn)
+                    }
                 }
                 .padding(.horizontal, 28)
-                .padding(.top, 12)
-                .padding(.bottom, 16)
             } else {
                 preparing
             }
@@ -31,10 +38,6 @@ struct ReviewView: View {
         .background(Theme.paper)
         .task(id: sourceID) {
             if let sourceID { await review.observe(sourceID: sourceID) }
-        }
-        .inspector(isPresented: $showsTracks) {
-            TrackList()
-                .inspectorColumnWidth(min: 220, ideal: 250, max: 340)
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -57,42 +60,67 @@ struct ReviewView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var controls: some View {
-        HStack(spacing: 10) {
-            Button {
-                review.togglePlayback()
-            } label: {
-                Image(systemName: model.player.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 15))
-                    .foregroundStyle(Theme.paper)
-                    .frame(width: 40, height: 40)
-                    .background(Theme.ink, in: .circle)
-                    .contentShape(.circle)
+    /// The whole side, the close-up, and what can be done at the playhead.
+    private func side(_ waveform: Waveform) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 14) {
+                sectionTitle(sideHeading(model.selectedItem))
+                Spacer(minLength: 0)
+                HStack(spacing: 8) {
+                    Text("Whole side")
+                    Text(TimeLabel.clock(review.duration))
+                }
+                .font(Theme.mono())
+                .foregroundStyle(Theme.ink)
+                .fixedSize()
+                .accessibilityElement(children: .combine)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(model.player.isPlaying ? "Pause" : "Play")
+            .padding(.bottom, 6)
 
-            PlayheadClock()
+            OverviewStrip(waveform: waveform)
+                .frame(height: 58)
+            OverviewRuler(duration: review.duration)
 
-            Spacer(minLength: 4)
-
-            Button {
-                review.addMarkerAtPlayhead()
-            } label: {
-                Label("Add Marker", systemImage: "flag.fill")
-                    .fixedSize()
+            HStack(spacing: 9) {
+                sectionTitle("Close-up")
+                Spacer(minLength: 0)
+                zoomButton("−", label: "Zoom Out", key: "-", factor: 1.5)
+                zoomButton("+", label: "Zoom In", key: "=", factor: 1 / 1.5)
             }
-            .buttonStyle(.borderedProminent)
+            .padding(.top, 4)
 
-            Button("Zoom Out", systemImage: "minus.magnifyingglass") {
-                review.setZoom(span: review.zoomSpan * 1.5, keeping: model.player.preciseTime)
-            }
-            .labelStyle(.iconOnly)
-            Button("Zoom In", systemImage: "plus.magnifyingglass") {
-                review.setZoom(span: review.zoomSpan / 1.5, keeping: model.player.preciseTime)
-            }
-            .labelStyle(.iconOnly)
+            TimeRuler(start: review.zoomStart, span: max(review.zoomSpan, 0.001))
+                .frame(height: 20)
+            ZoomedWaveform(waveform: waveform)
+                .frame(minHeight: Self.minimumCloseUp, idealHeight: Self.minimumCloseUp, maxHeight: .infinity)
+
+            TransportRow()
+                .padding(.vertical, 6)
+            HairlineRule()
+            MarkerRow()
+                .padding(.vertical, 6)
+            TrimRow()
         }
+        .padding(.vertical, 8)
+    }
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(Theme.serif(size.sectionTitle))
+            .foregroundStyle(Theme.ink)
+            .lineLimit(1)
+            .help(title)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private func zoomButton(_ symbol: String, label: String, key: String, factor: Double) -> some View {
+        Button(symbol) {
+            endTyping()
+            review.setZoom(span: review.zoomSpan * factor, keeping: model.player.preciseTime)
+        }
+        .buttonStyle(.paperSmall)
+        .help("\(label) (\(key))")
+        .accessibilityLabel(label)
     }
 }
 
@@ -105,12 +133,13 @@ private struct PlayheadClock: View {
         // timeline itself isn't running.
         let _ = model.player.currentTime
         TimelineView(.animation(minimumInterval: 1.0 / 20, paused: !model.player.isPlaying)) { _ in
-            Text(ReviewTime.precise(model.player.preciseTime))
-                .font(.system(size: 17, design: .monospaced))
+            let time = TimeLabel.clock(model.player.preciseTime)
+            let length = TimeLabel.clock(model.reviewModel.duration)
+            Text("\(time) / \(length)")
+                .font(Theme.mono())
                 .foregroundStyle(Theme.ink)
-                .monospacedDigit()
-                .frame(minWidth: 112, alignment: .leading)
-                .accessibilityLabel("Position \(TimeLabel.clock(model.player.preciseTime))")
+                .fixedSize()
+                .accessibilityLabel("Position \(time) of \(length)")
         }
     }
 }
@@ -121,9 +150,9 @@ enum ReviewTime {
 }
 
 private enum WaveformColors {
-    static let kept = Color(red: 0.42, green: 0.384, blue: 0.337)
+    static let kept = Theme.waveform
     static let trimmed = Color(red: 0.827, green: 0.788, blue: 0.69)
-    static let playhead = Color(red: 0.659, green: 0.196, blue: 0.102)
+    static let playhead = Theme.needle
     static let selected = Theme.accent
 }
 
@@ -194,6 +223,7 @@ private struct OverviewStrip: View {
             .contentShape(.rect)
             .gesture(
                 DragGesture(minimumDistance: 0).onChanged { value in
+                    if value.translation == .zero { endTyping() }
                     let time = max(0, min(duration, duration * value.location.x / width))
                     review.moveZoom(to: time - review.zoomSpan / 2)
                     review.scrub(to: time)
@@ -204,8 +234,26 @@ private struct OverviewStrip: View {
             .accessibilityLabel("Whole tape")
             .accessibilityValue("Playing at \(TimeLabel.clock(model.player.currentTime)) of \(TimeLabel.clock(duration))")
         }
-        .background(Theme.card.opacity(0.7), in: .rect(cornerRadius: 6))
-        .clipShape(.rect(cornerRadius: 6))
+        .scopeBackground()
+    }
+}
+
+/// The start, the thirds and the end of the side, under the whole of it.
+private struct OverviewRuler: View {
+    let duration: Double
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(0..<4, id: \.self) { third in
+                if third > 0 { Spacer(minLength: 4) }
+                Text(TimeLabel.clock(duration * Double(third) / 3))
+                    .fixedSize()
+            }
+        }
+        .font(.system(size: 10, design: .monospaced))
+        .foregroundStyle(Theme.muted)
+        .padding(.vertical, 3)
+        .accessibilityHidden(true)
     }
 }
 
@@ -226,6 +274,11 @@ private struct PlayheadLine: View {
             Rectangle()
                 .fill(WaveformColors.playhead)
                 .frame(width: 2, height: height)
+                .overlay(alignment: .top) {
+                    NeedleHead()
+                        .fill(WaveformColors.playhead)
+                        .frame(width: 8, height: 7)
+                }
                 .offset(x: x)
                 .opacity(x >= 0 && x <= width ? 1 : 0)
                 .onChange(of: time) { _, now in
@@ -239,12 +292,27 @@ private struct PlayheadLine: View {
     }
 }
 
+/// The pointed head at the top of the playhead.
+private struct NeedleHead: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { path in
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+            path.closeSubpath()
+        }
+    }
+}
+
 /// A close-up for placing markers. Drag to scrub, pinch to zoom.
 private struct ZoomedWaveform: View {
     @Environment(AppModel.self) private var model
     @State private var pinchStartSpan: Double?
 
     let waveform: Waveform
+
+    /// Space above the bars for the marker flags.
+    private static let flagRoom: CGFloat = 18
 
     private var review: ReviewModel { model.reviewModel }
 
@@ -261,23 +329,23 @@ private struct ZoomedWaveform: View {
                 Canvas { context, size in
                     let columns = max(1, Int(size.width / 2))
                     let levels = waveform.levels(from: start, to: start + span, columns: columns)
-                    drawLevels(levels, in: CGSize(width: size.width, height: size.height - 22), context: context) { index in
+                    drawLevels(levels, in: CGSize(width: size.width, height: size.height - Self.flagRoom), context: context) { index in
                         let time = start + span * (Double(index) + 0.5) / Double(columns)
                         return time >= trimStart && time <= trimEnd ? WaveformColors.kept : WaveformColors.trimmed
                     }
                 }
-                .padding(.top, 22)
-
-                TimeRuler(start: start, span: span, width: width)
-                    .allowsHitTesting(false)
+                .padding(.top, Self.flagRoom)
 
                 PlayheadLine(duration: review.duration, start: start, span: span, width: width, height: height)
 
                 ForEach(review.review?.markers ?? []) { marker in
                     let x = width * (marker.time - start) / span
                     if x >= -40, x <= width + 40 {
-                        MarkerFlag(marker: marker, width: width, span: span, height: height)
-                            .offset(x: x)
+                        MarkerFlag(
+                            marker: marker, number: review.trackNumber(startingAt: marker),
+                            width: width, span: span, height: height
+                        )
+                        .offset(x: x)
                     }
                 }
             }
@@ -285,6 +353,7 @@ private struct ZoomedWaveform: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
+                        if value.translation == .zero { endTyping() }
                         let time = start + span * value.location.x / width
                         review.selectedMarkerID = nil
                         review.scrub(to: time)
@@ -304,26 +373,35 @@ private struct ZoomedWaveform: View {
             .accessibilityLabel("Zoomed waveform")
             .accessibilityValue("Showing \(TimeLabel.clock(start)) to \(TimeLabel.clock(start + span))")
         }
-        .background(Theme.card, in: .rect(cornerRadius: 8))
-        .clipShape(.rect(cornerRadius: 8))
+        .scopeBackground()
     }
 }
 
 struct TimeRuler: View {
     let start: Double
     let span: Double
-    let width: CGFloat
-
-    private var step: Double {
-        let target = span / max(1, Double(width) / 90)
-        return [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600].first { $0 >= target } ?? 7200
-    }
+    /// The width the times are spread over. Nil takes the width the ruler is given.
+    var width: CGFloat?
 
     var body: some View {
+        if let width {
+            marks(over: width)
+        } else {
+            GeometryReader { geometry in
+                marks(over: geometry.size.width)
+                    .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+                    .clipped()
+            }
+        }
+    }
+
+    private func marks(over width: CGFloat) -> some View {
+        let target = span / max(1, Double(width) / 90)
+        let step: Double = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600].first { $0 >= target } ?? 7200
         let first = (start / step).rounded(.up) * step
-        let marks = Array(stride(from: first, through: start + span, by: step))
-        ZStack(alignment: .topLeading) {
-            ForEach(marks, id: \.self) { time in
+        let times = Array(stride(from: first, through: start + span, by: step))
+        return ZStack(alignment: .topLeading) {
+            ForEach(times, id: \.self) { time in
                 Text(TimeLabel.clock(time))
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(Theme.inkMuted)
@@ -334,17 +412,25 @@ struct TimeRuler: View {
     }
 }
 
-/// A draggable marker with a flag showing its time.
+/// A draggable marker, flagged with the number of the track it starts. While it's
+/// dragged the flag shows the time instead.
 private struct MarkerFlag: View {
     @Environment(AppModel.self) private var model
     @State private var dragTime: Double?
 
     let marker: Marker
+    /// Nil for a marker that starts no track, such as one in a trimmed-off part.
+    let number: Int?
     let width: CGFloat
     let span: Double
     let height: CGFloat
 
     private var isSelected: Bool { model.reviewModel.selectedMarkerID == marker.id }
+
+    private var label: String {
+        if let dragTime { return ReviewTime.precise(dragTime) }
+        return number.map(trackNumberText) ?? ReviewTime.precise(marker.time)
+    }
 
     var body: some View {
         let color = isSelected ? WaveformColors.selected : Theme.ink
@@ -352,11 +438,12 @@ private struct MarkerFlag: View {
             Rectangle()
                 .fill(color)
                 .frame(width: 2, height: height)
-            Text(TimeLabel.clock(dragTime ?? marker.time))
+            Text(label)
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundStyle(Theme.paper)
                 .padding(.horizontal, 5)
                 .padding(.vertical, 2)
+                .frame(minWidth: 24, alignment: .leading)
                 .background(color, in: .rect(cornerRadius: 3))
                 .fixedSize()
         }
@@ -365,6 +452,7 @@ private struct MarkerFlag: View {
         .gesture(
             DragGesture(minimumDistance: 2)
                 .onChanged { value in
+                    if dragTime == nil { endTyping() }
                     model.reviewModel.selectedMarkerID = marker.id
                     let change = span * value.translation.width / width
                     dragTime = max(0.01, min(model.reviewModel.duration - 0.01, marker.time + change))
@@ -377,107 +465,257 @@ private struct MarkerFlag: View {
                 }
         )
         .simultaneousGesture(
-            TapGesture().onEnded { model.reviewModel.select(marker) }
+            TapGesture().onEnded {
+                endTyping()
+                model.reviewModel.select(marker)
+            }
         )
         .accessibilityElement()
-        .accessibilityLabel("Marker at \(TimeLabel.clock(marker.time))")
+        .accessibilityLabel("\(markerName(number)) at \(TimeLabel.clock(marker.time))")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { model.reviewModel.select(marker) }
     }
 }
 
-/// Actions for the selected marker, and the trims. These wrap onto two rows rather
-/// than squeezing, so nothing ever stacks letter by letter in a narrow window.
-private struct MarkerControls: View {
+/// `02`, as tracks and their markers are numbered.
+private func trackNumberText(_ number: Int) -> String {
+    String(format: "%02d", number)
+}
+
+/// `Marker 02`, named for the track it starts.
+private func markerName(_ number: Int?) -> String {
+    number.map { "Marker \(trackNumberText($0))" } ?? "Marker"
+}
+
+/// What the side is called. It's the side's own name, so renaming its opening track
+/// doesn't change it. The recording's name stands in only when the side has none.
+private func sideHeading(_ item: ShelfTape.Item?) -> String {
+    guard let item else { return "Recording" }
+    return item.source.side.map { "Side \($0)" } ?? item.name
+}
+
+/// Takes the keyboard away from a name being typed, so keys reach Review again.
+@MainActor
+private func endTyping() {
+    NSApp.keyWindow?.makeFirstResponder(nil)
+}
+
+/// Play, the clock, and adding a marker. The checkbox drops to a second line when
+/// the row gets narrow.
+private struct TransportRow: View {
     @Environment(AppModel.self) private var model
 
     private var review: ReviewModel { model.reviewModel }
 
     var body: some View {
-        @Bindable var review = review
-
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                if let marker = review.selectedMarker {
-                    Text("Marker at \(ReviewTime.precise(marker.time))")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Theme.ink)
-                        .fixedSize()
-                    Button(review.isHearingJoin ? "Playing…" : "Hear the Join") { review.hearJoin() }
-                        .disabled(review.isHearingJoin)
-                        .fixedSize()
-                    Button("−0.1") { review.nudgeSelection(by: -0.1) }.fixedSize()
-                    Button("+0.1") { review.nudgeSelection(by: 0.1) }.fixedSize()
-                    Button("Delete", role: .destructive) { review.deleteSelectedMarker() }.fixedSize()
-                } else {
-                    Text("Press M to mark where a track starts.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.inkMuted)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 0)
-            }
-            .frame(minHeight: 24)
-
-            HStack(spacing: 8) {
-                Toggle("Snap to quiet", isOn: $review.snapsToQuiet)
-                    .toggleStyle(.checkbox)
-                    .fixedSize()
-                    .help("New markers settle into the nearest quiet moment. Hold Option to place one exactly.")
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 9) {
+                playback
                 Spacer(minLength: 4)
-                Button("Trim Side Start") { review.setTrimStart() }.fixedSize()
-                    .help("Keep this whole side from the playhead onward. To trim one track, use Edit.")
-                Button("Trim Side End") { review.setTrimEnd() }.fixedSize()
-                    .help("Keep this whole side up to the playhead. To trim one track, use Edit.")
-                if (review.review?.trimStart ?? 0) > 0 || review.review?.source.trimEnd != nil {
-                    Button("Reset") { review.resetTrim() }.fixedSize()
+                snapToggle
+                addButton
+            }
+            VStack(alignment: .trailing, spacing: 6) {
+                HStack(spacing: 9) {
+                    playback
+                    Spacer(minLength: 4)
+                    addButton
                 }
+                snapToggle
             }
         }
-        .controlSize(.small)
+    }
+
+    private var playback: some View {
+        HStack(spacing: 9) {
+            Button {
+                endTyping()
+                review.togglePlayback()
+            } label: {
+                Image(systemName: model.player.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.paper)
+                    .frame(width: 34, height: 34)
+                    .background(Theme.primary, in: .circle)
+                    .contentShape(.circle)
+            }
+            .buttonStyle(.plain)
+            .help("Play or pause (Space)")
+            .accessibilityLabel(model.player.isPlaying ? "Pause" : "Play")
+
+            PlayheadClock()
+        }
+    }
+
+    private var snapToggle: some View {
+        @Bindable var review = review
+        return Toggle("Snap to quiet", isOn: $review.snapsToQuiet)
+            .toggleStyle(.checkbox)
+            .controlSize(.small)
+            .foregroundStyle(Theme.ink)
+            .fixedSize()
+            .help("New markers settle into the nearest quiet moment. Hold Option to place one exactly.")
+    }
+
+    private var addButton: some View {
+        Button {
+            endTyping()
+            review.addMarkerAtPlayhead()
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "flag.fill")
+                    .accessibilityHidden(true)
+                Text("Add marker")
+                KeyLetter("M")
+            }
+        }
+        .buttonStyle(.paperStandard)
+        .help("Add a marker at the playhead (M)")
     }
 }
 
-/// Shows as many key reminders as fit, most useful first.
-private struct KeyHints: View {
-    private static let all: [(String, String)] = [
-        ("Space", "Play"), ("M", "Marker"), ("H", "Hear join"), ("← →", "Nudge"),
-        (", .", "Previous, next"), ("J K L", "Shuttle"), ("- =", "Zoom"), ("I O", "Trim"), ("⌘Z", "Undo"),
-    ]
+/// The key that does what a button does.
+private struct KeyLetter: View {
+    let key: String
+
+    init(_ key: String) { self.key = key }
+
+    var body: some View {
+        Text(key)
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(Theme.muted)
+    }
+}
+
+/// The selected marker and what can be done with it. With none selected it holds the
+/// same height, so the close-up doesn't change size as markers are picked.
+private struct MarkerRow: View {
+    @Environment(AppModel.self) private var model
+
+    private var review: ReviewModel { model.reviewModel }
+
+    var body: some View {
+        if let marker = review.selectedMarker {
+            row(number: review.trackNumber(startingAt: marker), time: marker.time)
+        } else {
+            row(number: 1, time: 0)
+                .hidden()
+                .overlay(alignment: .leading) {
+                    Text("Press M to mark where a track starts.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(1)
+                }
+        }
+    }
+
+    private func row(number: Int?, time: Double) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 9) {
+                title(number: number, time: time)
+                Spacer(minLength: 4)
+                actions
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                title(number: number, time: time)
+                actions
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func title(number: Int?, time: Double) -> some View {
+        HStack(spacing: 8) {
+            Text(markerName(number))
+                .font(.system(size: 13, weight: .medium))
+            Text(ReviewTime.precise(time))
+                .font(Theme.mono())
+        }
+        .foregroundStyle(Theme.ink)
+        .fixedSize()
+        .accessibilityElement(children: .combine)
+    }
+
+    private var actions: some View {
+        HStack(spacing: 6) {
+            Button(review.isHearingJoin ? "Playing…" : "Hear the join") { endTyping(); review.hearJoin() }
+                .disabled(review.isHearingJoin)
+                .help("Play a few seconds either side of this marker (H)")
+            Button("−0.1 s") { endTyping(); review.nudgeSelection(by: -0.1) }
+                .help("Move the marker earlier (←)")
+            Button("+0.1 s") { endTyping(); review.nudgeSelection(by: 0.1) }
+                .help("Move the marker later (→)")
+            Button("Delete", role: .destructive) { endTyping(); review.deleteSelectedMarker() }
+                .help("Delete this marker (Delete key)")
+        }
+        .buttonStyle(.paperSmall)
+    }
+}
+
+/// The side's trims, and undo. These wrap onto two rows rather than squeezing.
+private struct TrimRow: View {
+    @Environment(AppModel.self) private var model
+
+    private var review: ReviewModel { model.reviewModel }
+
+    private var isTrimmed: Bool {
+        (review.review?.trimStart ?? 0) > 0 || review.review?.source.trimEnd != nil
+    }
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            row(Self.all)
-            row(Array(Self.all.prefix(6)))
-            row(Array(Self.all.prefix(4)))
-            row(Array(Self.all.prefix(2)))
-            EmptyView()
+            HStack(spacing: 6) {
+                trims
+                undo
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) { trims }
+                undo
+            }
+        }
+        .buttonStyle(.paperSmall)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private var trims: some View {
+        Button {
+            endTyping()
+            review.setTrimStart()
+        } label: {
+            HStack(spacing: 6) {
+                Text("Trim side start")
+                KeyLetter("I")
+            }
+        }
+        .help("Keep this whole side from the playhead onward. To trim one track, use Edit.")
+        Button {
+            endTyping()
+            review.setTrimEnd()
+        } label: {
+            HStack(spacing: 6) {
+                Text("Trim side end")
+                KeyLetter("O")
+            }
+        }
+        .help("Keep this whole side up to the playhead. To trim one track, use Edit.")
+        if isTrimmed {
+            Button("Reset") { endTyping(); review.resetTrim() }
+                .help("Keep the whole side again")
         }
     }
 
-    private func row(_ hints: [(String, String)]) -> some View {
-        HStack(spacing: 10) {
-            ForEach(hints, id: \.0) { key, label in
-                HStack(spacing: 4) {
-                    Text(key)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(Theme.ink)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(Theme.card, in: .rect(cornerRadius: 3))
-                    Text(label)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.inkMuted)
-                }
-                .fixedSize()
-            }
-        }
+    private var undo: some View {
+        Button("Undo") { endTyping(); review.undo() }
+            .help("Undo a marker or trim change (⌘Z). Redo with ⌘⇧Z.")
     }
 }
 
-/// The tracks that the markers make. Names are edited in place.
-private struct TrackList: View {
+/// The tracks that the markers make, with the side's options underneath.
+private struct TrackColumn: View {
     @Environment(AppModel.self) private var model
+
+    let tape: ShelfTape
+    let size: LayoutSize
 
     private var review: ReviewModel { model.reviewModel }
     private var tracks: [ReviewTrack] { review.review?.tracks ?? [] }
@@ -487,97 +725,151 @@ private struct TrackList: View {
     }
 
     var body: some View {
-        ScrollView {
+        VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
-                Text(tracks.count == 1 ? "1 track" : "\(tracks.count) tracks")
-                    .font(Theme.display(24))
+                CapLabel(sideHeading(model.selectedItem))
+                Text("Tracks on this side")
+                    .font(Theme.serif(size == .regular ? 21 : 17))
                     .foregroundStyle(Theme.ink)
-                Text("Your master stays whole. Nothing is cut until you push to the site.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.inkMuted)
-                    .padding(.bottom, 8)
-
-                ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
-                    TrackRow(number: index + 1, track: track)
-                }
-
-                if keptDuration > 0, keptDuration < review.duration - 0.01 {
-                    Text("Keeping \(TimeLabel.clock(keptDuration)) of \(TimeLabel.clock(review.duration))")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.inkMuted)
-                        .padding(.top, 8)
-                }
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
             }
-            .padding(18)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 14)
+            .padding(.bottom, 8)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
+                        TrackRow(number: index + 1, track: track, size: size)
+                    }
+
+                    if keptDuration > 0, keptDuration < review.duration - 0.01 {
+                        Text("Keeping \(TimeLabel.clock(keptDuration)) of \(TimeLabel.clock(review.duration))")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.muted)
+                            .padding(.top, 10)
+                    }
+                    Text("Your master stays whole. Nothing is cut until you push to the site.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.muted)
+                        .padding(.top, 10)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.bottom, 10)
+            }
+
+            if SideOptionsMenu.isOffered(for: tape, item: model.selectedItem) {
+                HairlineRule()
+                SideOptionsMenu(tape: tape)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.muted)
+                    .padding(.vertical, 12)
+            }
         }
-        .background(Theme.paper.opacity(0.6))
+        .padding(.leading, size == .regular ? 24 : 14)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(Theme.line)
+                .frame(width: 1)
+                .accessibilityHidden(true)
+        }
     }
 }
 
+/// A track in the column. A click goes to it, and a double-click on its name renames
+/// it. The name is only a field while it's being typed, so keys otherwise reach Review.
 private struct TrackRow: View {
     @Environment(AppModel.self) private var model
-    @State private var name = ""
+    /// The name being typed, or nil when it isn't being edited.
+    @State private var draft: String?
     @FocusState private var isFocused: Bool
 
     let number: Int
     let track: ReviewTrack
+    let size: LayoutSize
+
+    private var placeholder: String { "Track \(number)" }
+
+    private var detail: String {
+        let start = TimeLabel.clock(track.start)
+        return model.reviewModel.review?.source.side.map { "Side \($0) · \(start)" } ?? start
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                Text("\(number)")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(Theme.inkMuted)
-                TextField("Track \(number)", text: $name)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.ink)
-                    .focused($isFocused)
-                    .onSubmit(save)
-                    .accessibilityLabel("Name of track \(number)")
-            }
-            HStack(spacing: 8) {
-                Button(TimeLabel.clock(track.start)) {
-                    if let id = track.markerID,
-                       let marker = model.reviewModel.review?.markers.first(where: { $0.id == id }) {
-                        model.reviewModel.select(marker)
-                    } else {
-                        model.reviewModel.selectedMarkerID = nil
-                        model.reviewModel.seek(to: track.start)
-                    }
-                }
-                .buttonStyle(.borderless)
-                .tint(Theme.accent)
-                .accessibilityLabel("Go to track \(number), at \(TimeLabel.clock(track.start))")
-
-                Text("· \(TimeLabel.clock(track.duration)) long")
-                    .foregroundStyle(Theme.inkMuted)
-            }
-            .font(.system(size: 11, design: .monospaced))
+        NumberedTrackRow(
+            number: trackNumberText(number),
+            detail: detail,
+            duration: TimeLabel.clock(track.duration),
+            size: size,
+            isPicked: model.reviewModel.selectedTrack?.id == track.id
+        ) {
+            name
         }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isCurrent ? Theme.card : .clear, in: .rect(cornerRadius: 6))
-        .onAppear { name = track.name ?? "" }
-        .onChange(of: track.name) { _, updated in
-            if !isFocused { name = updated ?? "" }
-        }
-        .onChange(of: isFocused) { _, focused in
-            if !focused { save() }
-        }
+        .contentShape(.rect)
+        .simultaneousGesture(TapGesture().onEnded {
+            // A click while typing is placing the cursor.
+            if draft == nil { go() }
+        })
         // Choosing another tab can take the field away before it loses focus.
-        .onDisappear(perform: save)
+        .onDisappear { finish(save: true) }
     }
 
-    private var isCurrent: Bool {
-        let time = model.player.currentTime
-        return time >= track.start && time < track.end
+    @ViewBuilder private var name: some View {
+        if draft != nil {
+            TextField(placeholder, text: Binding(get: { draft ?? "" }, set: { if draft != nil { draft = $0 } }))
+                .textFieldStyle(.plain)
+                .font(Theme.serif(size.rowName))
+                .foregroundStyle(Theme.ink)
+                .focused($isFocused)
+                .onSubmit {
+                    finish(save: true)
+                    endTyping()
+                }
+                .onExitCommand {
+                    finish(save: false)
+                    endTyping()
+                }
+                .onChange(of: isFocused) { _, focused in if !focused { finish(save: true) } }
+                .onAppear { DispatchQueue.main.async { isFocused = true } }
+                .accessibilityLabel("Name of track \(number)")
+        } else {
+            let shown = track.name.flatMap { $0.isEmpty ? nil : $0 } ?? placeholder
+            Text(shown)
+                .font(Theme.serif(size.rowName))
+                .foregroundStyle(track.name?.isEmpty == false ? Theme.ink : Theme.muted)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(.rect)
+                .onTapGesture(count: 2) { rename() }
+                .help("\(shown). Double-click to rename.")
+                .accessibilityLabel("Track \(number), \(shown), at \(TimeLabel.clock(track.start))")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { go() }
+                .accessibilityAction(named: "Rename") { rename() }
+        }
     }
 
-    private func save() {
-        guard let id = track.trackID, name != (track.name ?? "") else { return }
+    private func go() {
+        endTyping()
+        if let id = track.markerID,
+           let marker = model.reviewModel.review?.markers.first(where: { $0.id == id }) {
+            model.reviewModel.select(marker)
+        } else {
+            model.reviewModel.selectedMarkerID = nil
+            model.reviewModel.seek(to: track.start)
+        }
+    }
+
+    private func rename() {
+        guard track.trackID != nil else { return }
+        draft = track.name ?? ""
+    }
+
+    private func finish(save: Bool) {
+        guard let name = draft else { return }
+        draft = nil
+        guard save, let id = track.trackID, name != (track.name ?? "") else { return }
         model.reviewModel.rename(trackID: id, to: name)
     }
 }
