@@ -823,7 +823,7 @@ private struct Inspector: View {
             settings
             // As in the mock, the way back sits right under the drag hint, unruled.
             // Both stay at the foot, so the way back is never scrolled out of sight.
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 0) {
                 if edit.expandedLane != nil {
                     HairlineRule()
                     Text("Drag between tracks to reorder. Drop onto a track to append its audio.")
@@ -831,10 +831,12 @@ private struct Inspector: View {
                         .foregroundStyle(Theme.muted)
                         .lineLimit(3)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 7)
                 }
+                // No inset below: the window footer already sits under it.
                 ReturnToSide()
+                    .padding(.top, 5)
             }
-            .padding(.vertical, 12)
         }
         .padding(.leading, size == .regular ? 24 : 14)
         .frame(maxHeight: .infinity, alignment: .top)
@@ -846,7 +848,9 @@ private struct Inspector: View {
         }
     }
 
-    /// The part that scrolls, leaving the drag hint and the way back in place under it.
+    /// The part that scrolls, leaving the drag hint and the way back in place under
+    /// it. Sized for Track actions to fit at 900 by 692 with a two-line name and
+    /// the clipping warning, not yet checked on screen. Smaller windows scroll.
     private var settings: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -855,8 +859,8 @@ private struct Inspector: View {
                     TrackSettings(lane: lane)
                         .disabled(edit.isOnSite)
                     SettingsNote(locked: edit.isOnSite)
-                        .padding(.top, 10)
-                    rule
+                        .padding(.vertical, 7)
+                    HairlineRule()
                     TrackActions(lane: lane, size: size, append: append)
                         .disabled(edit.isOnSite)
                         // A question about one track isn't left open over another.
@@ -865,23 +869,18 @@ private struct Inspector: View {
                     Text("Select a track")
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.muted)
-                    SettingsNote(locked: edit.isOnSite)
                         .padding(.top, 14)
+                    SettingsNote(locked: edit.isOnSite)
+                        .padding(.vertical, 14)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 14)
         }
-    }
-
-    private var rule: some View {
-        HairlineRule()
-            .padding(.vertical, 16)
     }
 
     private func heading(_ lane: EditModel.Lane) -> some View {
         let place = lane.isAppended ? "Piece \(lane.label)" : "Track \(trackNumberText(lane.number))"
-        return VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: 4) {
             CapLabel(lane.side.map { "\(place) / Side \($0)" } ?? place)
             Text(displayName(lane))
                 .font(Theme.serif(size.sectionTitle))
@@ -890,7 +889,7 @@ private struct Inspector: View {
                 .help(displayName(lane))
                 .accessibilityAddTraits(.isHeader)
         }
-        .padding(.bottom, 6)
+        .padding(.bottom, 2)
     }
 }
 
@@ -937,13 +936,27 @@ private struct TrackSettings: View {
             level
             speed
             direction
-            KeyValueRow(key: "Trim start", value: TimeText.hundredths(cuts.start / settings.speed))
-            KeyValueRow(key: "Trim end", value: TimeText.hundredths((lane.spanLength - cuts.end) / settings.speed))
+            KeyValueRow(key: "Trim start", value: TimeText.hundredths(cuts.start / settings.speed),
+                        verticalPadding: 4.5)
+            KeyValueRow(key: "Trim end", value: TimeText.hundredths((lane.spanLength - cuts.end) / settings.speed),
+                        verticalPadding: 4.5)
         }
     }
 
+    /// The value sits above the slider, which leaves the button room for "Measuring…".
     @ViewBuilder private var level: some View {
-        KeyValueRow(key: "Level", value: Self.decibels(settings.gainDB))
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text("Level")
+                .foregroundStyle(Theme.muted)
+                .fixedSize()
+            Spacer(minLength: 0)
+            Text(Self.decibels(settings.gainDB))
+                .foregroundStyle(Theme.ink)
+                .fixedSize()
+        }
+        .font(.system(size: 13))
+        .padding(.top, 4)
+        .accessibilityElement(children: .combine)
         HStack(spacing: 8) {
             Slider(
                 value: Binding(
@@ -962,7 +975,7 @@ private struct TrackSettings: View {
                 .disabled(edit.measuring.contains(lane.id))
                 .help("Raise or lower the level so the loudest moment sits just under the top")
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 3)
         if let peak = edit.loudestPeak(of: lane), peak.decibels + settings.gainDB > -0.1, settings.gainDB > 0 {
             Label(
                 peak.exact
@@ -972,46 +985,53 @@ private struct TrackSettings: View {
             )
             .font(.system(size: 11))
             .foregroundStyle(Theme.attention)
-            .padding(.bottom, 6)
+            .lineLimit(3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.bottom, 4)
         }
+        HairlineRule()
     }
 
+    /// 1% steps either side of the speed, which is also the menu of presets.
     private var speed: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(spacing: 0) {
             HStack(spacing: 6) {
                 Text("Speed")
                     .foregroundStyle(Theme.muted)
                     .fixedSize()
                 Spacer(minLength: 0)
                 Button("−") { setSpeed(settings.speed - 0.01) }
+                    .buttonStyle(.paperSmall)
                     .help("1% slower")
                     .accessibilityLabel("Slower")
-                Text(Self.percent(settings.speed))
-                    .monospacedDigit()
-                    .foregroundStyle(Theme.ink)
-                    .frame(minWidth: 46)
-                    .fixedSize()
-                    .accessibilityLabel("Speed \(Self.percent(settings.speed))")
+                Menu(Self.percent(settings.speed)) {
+                    Picker("Speed preset", selection: Binding(
+                        get: { [0.5, 1, 2].first { abs($0 - settings.speed) < 0.0005 } ?? 0 },
+                        set: { if $0 > 0 { setSpeed($0) } }
+                    )) {
+                        Text("½×").tag(0.5)
+                        Text("1×").tag(1.0)
+                        Text("2×").tag(2.0)
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                }
+                .menuStyle(.borderlessButton)
+                .monospacedDigit()
+                .fixedSize()
+                // Room for the widest value, so − stays put as the value changes.
+                .frame(minWidth: 58)
+                .help("½× plays a tape recorded at half the speed it was captured at, 2× the reverse")
+                .accessibilityLabel("Speed \(Self.percent(settings.speed))")
                 Button("+") { setSpeed(settings.speed + 0.01) }
+                    .buttonStyle(.paperSmall)
                     .help("1% faster")
                     .accessibilityLabel("Faster")
             }
-            .buttonStyle(.paperSmall)
-            Picker("Speed preset", selection: Binding(
-                get: { [0.5, 1, 2].first { abs($0 - settings.speed) < 0.0005 } ?? 0 },
-                set: { if $0 > 0 { setSpeed($0) } }
-            )) {
-                Text("½×").tag(0.5)
-                Text("1×").tag(1.0)
-                Text("2×").tag(2.0)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .help("½× plays a tape recorded at half the speed it was captured at, 2× the reverse")
+            .font(.system(size: 13))
+            .padding(.vertical, 4)
             HairlineRule()
         }
-        .font(.system(size: 13))
-        .padding(.top, 8)
     }
 
     private var direction: some View {
@@ -1038,7 +1058,7 @@ private struct TrackSettings: View {
                 .accessibilityLabel("Direction: \(settings.reversed ? "Reversed" : "Forward")")
             }
             .font(.system(size: 13))
-            .padding(.vertical, 8)
+            .padding(.vertical, 5.5)
             HairlineRule()
         }
     }
@@ -1057,7 +1077,7 @@ private struct TrackSettings: View {
     }
 }
 
-/// Joining, appending, detaching, moving and resetting.
+/// Joining, appending, detaching, moving and resetting, in one menu.
 private struct TrackActions: View {
     @Environment(AppModel.self) private var model
     @State private var confirmsJoin = false
@@ -1070,25 +1090,18 @@ private struct TrackActions: View {
 
     var body: some View {
         let targets = edit.appendTargets(for: lane)
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Track actions")
-                .font(Theme.serif(size.sectionTitle))
-                .foregroundStyle(Theme.ink)
-                .accessibilityAddTraits(.isHeader)
-
+        Menu {
             Button("Join with previous…") { edit.endTyping(); confirmsJoin = true }
                 .disabled(!edit.canJoin(lane))
                 .accessibilityLabel("Join with previous…")
 
             Menu("Append to another track…") {
                 ForEach(targets) { target in
-                    Button("\(trackNumberText(target.number))  \(displayName(target))") {
-                        append(lane, target)
-                    }
+                    let title = "\(trackNumberText(target.number))  \(displayName(target))"
+                    Button(title) { append(lane, target) }
+                        .accessibilityLabel(title)
                 }
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
             .disabled(targets.isEmpty)
             .help("Play this track straight after another, as one track on the site")
 
@@ -1097,17 +1110,14 @@ private struct TrackActions: View {
                     .accessibilityLabel("Detach into its own track")
             }
 
-            HStack(spacing: 8) {
-                Button("Move up") { edit.move(lane, by: -1) }
-                    .disabled(!edit.canMove(lane, by: -1))
-                    .accessibilityLabel("Move up")
-                Text("/")
-                    .foregroundStyle(Theme.muted)
-                    .accessibilityHidden(true)
-                Button("Move down") { edit.move(lane, by: 1) }
-                    .disabled(!edit.canMove(lane, by: 1))
-                    .accessibilityLabel("Move down")
-            }
+            Button("Move up") { edit.move(lane, by: -1) }
+                .disabled(!edit.canMove(lane, by: -1))
+                .accessibilityLabel("Move up")
+            Button("Move down") { edit.move(lane, by: 1) }
+                .disabled(!edit.canMove(lane, by: 1))
+                .accessibilityLabel("Move down")
+
+            Divider()
 
             Button("Reset trim") { edit.resetTrim(lane) }
                 .disabled(!lane.track.isCut)
@@ -1115,9 +1125,14 @@ private struct TrackActions: View {
             Button("Reset level, speed and direction") { edit.set(.none, for: lane) }
                 .disabled(edit.adjustments(for: lane).isNeutral)
                 .accessibilityLabel("Reset level, speed and direction")
+        } label: {
+            TrackActionsLabel(size: size)
         }
-        .buttonStyle(ActionLineStyle())
-        .font(.system(size: 13))
+        // As a plain button, the menu keeps the serif heading and fills the row.
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .accessibilityLabel("Track actions")
         .confirmationDialog("Join \(lane.label) onto the track before it?", isPresented: $confirmsJoin) {
             Button("Join Tracks", role: .destructive) { edit.joinWithPrevious(lane) }
         } message: {
@@ -1126,23 +1141,27 @@ private struct TrackActions: View {
     }
 }
 
-/// An action written as a line of text.
-private struct ActionLineStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        Face(configuration: configuration)
-    }
+/// The heading that opens the track actions. A view of its own, so it can read
+/// whether the menu is enabled.
+private struct TrackActionsLabel: View {
+    @Environment(\.isEnabled) private var isEnabled
 
-    /// A view of its own, so it can read whether the button is enabled.
-    private struct Face: View {
-        @Environment(\.isEnabled) private var isEnabled
+    let size: LayoutSize
 
-        let configuration: Configuration
-
-        var body: some View {
-            configuration.label
-                .foregroundStyle(Theme.ink)
-                .contentShape(.rect)
-                .opacity(!isEnabled ? 0.4 : configuration.isPressed ? 0.6 : 1)
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Track actions")
+                .font(Theme.serif(size.sectionTitle))
+                .fixedSize()
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 11))
+                .accessibilityHidden(true)
         }
+        .foregroundStyle(Theme.ink)
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity)
+        .contentShape(.rect)
+        .opacity(isEnabled ? 1 : 0.4)
     }
 }

@@ -236,6 +236,8 @@ struct HairlineRule: View {
 struct KeyValueRow: View {
     let key: String
     let value: String
+    /// Less where a column of rows has to fit a short window.
+    var verticalPadding: CGFloat = 10
 
     var body: some View {
         VStack(spacing: 0) {
@@ -251,7 +253,7 @@ struct KeyValueRow: View {
                     .help(value)
             }
             .font(.system(size: 13))
-            .padding(.vertical, 10)
+            .padding(.vertical, verticalPadding)
             HairlineRule()
         }
         .accessibilityElement(children: .combine)
