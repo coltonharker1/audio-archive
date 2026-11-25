@@ -1,0 +1,1 @@
+Review not run: grok -p failed with "402 Payment Required: Grok Build usage balance exhausted" (see .build/redesign-logs/followup-visual-review*.err). Fixer notes: .build/redesign-logs/followup-visual-fix.result.md. Re-run the grok-4.7-build-fast review once the balance is topped up.

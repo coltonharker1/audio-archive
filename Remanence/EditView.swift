@@ -818,10 +818,21 @@ private struct Inspector: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // As in the mock, the way back sits right under the drag hint, unruled.
             settings
-            ReturnToSide()
-                .padding(.vertical, 12)
+            // As in the mock, the way back sits right under the drag hint, unruled.
+            // Both stay at the foot, so the way back is never scrolled out of sight.
+            VStack(alignment: .leading, spacing: 12) {
+                if edit.expandedLane != nil {
+                    HairlineRule()
+                    Text("Drag between tracks to reorder. Drop onto a track to append its audio.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                ReturnToSide()
+            }
+            .padding(.vertical, 12)
         }
         .padding(.leading, size == .regular ? 24 : 14)
         .frame(maxHeight: .infinity, alignment: .top)
@@ -833,7 +844,7 @@ private struct Inspector: View {
         }
     }
 
-    /// The part that scrolls, leaving the way back to Review in place under it.
+    /// The part that scrolls, leaving the drag hint and the way back in place under it.
     private var settings: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -848,10 +859,6 @@ private struct Inspector: View {
                         .disabled(edit.isOnSite)
                         // A question about one track isn't left open over another.
                         .id(lane.id)
-                    rule
-                    Text("Drag between tracks to reorder. Drop onto a track to append its audio.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.muted)
                 } else {
                     Text("Select a track")
                         .font(.system(size: 13))

@@ -165,9 +165,12 @@ private struct LastOpened: View {
                 Text(tape.tape.title)
                     .font(Theme.serif(size.heroTitle))
                     .foregroundStyle(Theme.ink)
-                    .lineLimit(size == .regular ? 2 : 1)
+                    // Two lines as in the mock, then cut. The compact hero is only 150
+                    // tall, so its title sits a little closer to its neighbours.
+                    .lineLimit(2)
                     .help(tape.tape.title)
-                    .padding(.vertical, 7)
+                    .padding(.vertical, size == .regular ? 7 : 3)
+                    .layoutPriority(1)
                     .accessibilityAddTraits(.isHeader)
                 subtitle
                 HStack(spacing: 12) {

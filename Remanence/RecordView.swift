@@ -50,8 +50,12 @@ struct RecordView: View {
                             )
                             .labelStyle(.titleAndIcon)
                         }
+                        // The toolbar's own style greys a titled button, so it read as
+                        // disabled. The mocks' pale button reads as one that works.
+                        .buttonStyle(.paperStandard)
                         .help(record.isLarge ? "Show the tape’s label and settings" : "Fill the window with the meter, to read it from across the room")
                     }
+                    .sharedBackgroundVisibility(.hidden)
                 }
             }
         }

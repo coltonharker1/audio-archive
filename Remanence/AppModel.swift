@@ -807,7 +807,7 @@ final class AppModel {
 
     /// Where clearing the search goes. The recorder and a tape's screens aren't
     /// reopened, so those lead to the shelf or the collection.
-    private var routeAfterSearch: Route {
+    var routeAfterSearch: Route {
         switch routeBeforeSearch {
         case .catalog, .sitePosts, .setup: routeBeforeSearch
         case .shelf, .search, .readAlong, .review, .record, .post, .edit: .shelf

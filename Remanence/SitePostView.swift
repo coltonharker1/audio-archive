@@ -756,7 +756,11 @@ struct SitePostView: View {
     /// The post's first photo, and the way to the rest.
     private func photograph(_ post: SitePost) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            CapLabel("Post photograph")
+            // The mock's column heading, the same as Recording's "Capture settings".
+            Text("Post photograph")
+                .font(Theme.serif(size == .regular ? 21 : 17))
+                .foregroundStyle(Theme.ink)
+                .lineLimit(1)
                 .accessibilityAddTraits(.isHeader)
             if let image = post.images.first {
                 Thumbnail(url: try? model.library?.url(forLibraryPath: image.path))

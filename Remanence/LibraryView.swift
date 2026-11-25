@@ -89,15 +89,19 @@ struct LibraryView: View {
 private struct Breadcrumb: View {
     @Environment(AppModel.self) private var model
 
-    private var crumbs: [String] {
-        switch model.route {
+    private var crumbs: [String] { crumbs(for: model.route) }
+
+    private func crumbs(for route: Route) -> [String] {
+        switch route {
         case .shelf:
             if let collection = model.selectedCollection {
                 ["Collections", collection.collection.name]
             } else {
                 ["Library", "Shelf"]
             }
-        case .search: ["Library", "Search"]
+        // Named after where clearing the search goes, as the sidebar highlights it.
+        // That's the shelf, a collection or a library screen, never search itself.
+        case .search: crumbs(for: model.routeAfterSearch) + ["Search"]
         case .catalog: ["Library", "Catalog"]
         case .sitePosts: ["Library", "Site Posts"]
         case .setup: ["Setup"]
@@ -141,6 +145,7 @@ private struct Breadcrumb: View {
                         .buttonStyle(.plain)
                         .help("Back to \(crumb)")
                         .accessibilityLabel("Back to \(crumb)")
+                        .accessibilityAddTraits(.isButton)
                 } else {
                     text
                         .help(crumb)
@@ -152,6 +157,10 @@ private struct Breadcrumb: View {
         .lineLimit(1)
         .fixedSize()
         .padding(.horizontal, 6)
+        // A toolbar item can stand for its content as one group. Each crumb, and so
+        // the way back, is its own element inside it.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Breadcrumb")
     }
 }
 
