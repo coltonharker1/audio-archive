@@ -50,6 +50,9 @@ final class AppModel {
     private(set) var databaseError: String?
 
     private(set) var shelf: [ShelfTape] = []
+    /// Worked out once for each shelf update, since reading a tape's site snapshot
+    /// is too slow to do for every row on every redraw.
+    private var shelfStatuses: [ShelfTape.ID: ShelfStatus] = [:]
     private(set) var hasLoadedShelf = false
     private(set) var selectedTapeID: ShelfTape.ID?
     private(set) var selectedItemIndex = 0
@@ -324,6 +327,13 @@ final class AppModel {
         }
     }
 
+    /// Where a tape stands, for its badge. Words for anything still happening come
+    /// from `activityText`.
+    func status(of tape: ShelfTape) -> ShelfStatus {
+        if recordModel.isRecording, recordModel.recordingTapeID == tape.id { return .recording }
+        return shelfStatuses[tape.id] ?? ShelfStatus(tape)
+    }
+
     /// A one-line summary for the menu bar.
     var pipelineSummary: String {
         let working = shelf.filter {
@@ -462,6 +472,16 @@ final class AppModel {
     func handleReviewKey(code: UInt16, characters: String, shift: Bool) -> Bool {
         guard route == .review else { return false }
         return reviewModel.handleKey(code: code, characters: characters, shift: shift)
+    }
+
+    /// Return opens the tape picked on the shelf or in a collection. Returns whether
+    /// the key was used.
+    func handleShelfKey(code: UInt16) -> Bool {
+        // Return, or Enter on a number pad.
+        guard route == .shelf, code == 36 || code == 76, let tape = selectedTape,
+              visibleTapes.contains(where: { $0.id == tape.id }) else { return false }
+        openReview(tape)
+        return true
     }
 
     private func leaveToShelf() {
@@ -614,6 +634,7 @@ final class AppModel {
         isObservingShelf = true
         do {
             for try await tapes in library.shelfUpdates() {
+                shelfStatuses = Dictionary(uniqueKeysWithValues: tapes.map { ($0.id, ShelfStatus($0)) })
                 shelf = tapes
                 hasLoadedShelf = true
                 if let selectedTapeID, !tapes.contains(where: { $0.id == selectedTapeID }) {
@@ -807,6 +828,18 @@ final class AppModel {
         }
         notes += summary.failed
         if !notes.isEmpty { message = notes.joined(separator: "\n\n") }
+    }
+
+    func chooseAudioToImport() {
+        let panel = NSOpenPanel()
+        panel.message = "Choose recordings. A folder becomes one tape, with a track for each file."
+        panel.prompt = "Import"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = true
+        guard panel.runModal() == .OK else { return }
+        let urls = panel.urls
+        Task { await add(urls) }
     }
 
     func chooseBackupToImport() {

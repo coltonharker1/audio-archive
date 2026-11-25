@@ -83,6 +83,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // and treating that as "not typing" would swallow spaces from text fields.
         let responder = (window ?? NSApp.keyWindow)?.firstResponder
         guard !(responder is NSText) else { return false }
+        // Return in a dialog or a file panel belongs to its default button.
+        if !shift, let window, window.attachedSheet == nil, window.sheetParent == nil,
+           !(window is NSPanel), NSApp.modalWindow == nil,
+           model.handleShelfKey(code: keyCode) { return true }
         if model.handleEditKey(code: keyCode, characters: characters, shift: shift) { return true }
         guard player.currentURL != nil else { return false }
 

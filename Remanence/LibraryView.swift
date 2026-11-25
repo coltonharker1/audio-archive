@@ -68,9 +68,6 @@ struct LibraryView: View {
                     } else {
                         ShelfView()
                     }
-                    if model.selectedTape != nil {
-                        TapePanel()
-                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

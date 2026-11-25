@@ -1,58 +1,131 @@
 import RemanenceCore
 import SwiftUI
 
+/// The whole library as a list, under tabs that narrow it.
 struct ShelfView: View {
     @Environment(AppModel.self) private var model
+    /// The width of the detail area, which sets sizes and column widths.
+    @State private var width: CGFloat = 680
 
     private var tapes: [ShelfTape] { model.visibleTapes }
+    private var size: LayoutSize { LayoutSize(detailWidth: width) }
 
-    /// Large reels get their own shelf, as they would in a real room.
-    private var largeTapes: [ShelfTape] {
-        tapes.filter { TapeFormat(medium: $0.tape.medium) == .sevenInchReel }
+    /// The mocks' padding follows the window's width, which is wider than this
+    /// screen by the sidebar.
+    private var padding: CGFloat { LayoutSize.pagePadding(windowWidth: width + 220) }
+
+    private var subtitle: String {
+        let count = model.shelf.count
+        return "\(count) \(count == 1 ? "reel" : "reels") in your library"
     }
 
-    private var smallTapes: [ShelfTape] {
-        tapes.filter { TapeFormat(medium: $0.tape.medium) != .sevenInchReel }
-    }
-
-    private var summary: String {
-        let duration = tapes.reduce(0) { $0 + $1.duration }
-        let count = tapes.count == 1 ? "1 tape" : "\(tapes.count) tapes"
-        return "\(count) · \(TimeLabel.long(duration))"
+    /// Background work, said in the footer: the one tape being worked on, or a
+    /// summary when there are several.
+    private var footerNote: String {
+        let working = model.workingTapes
+        guard let tape = working.first else { return "" }
+        guard working.count == 1, let activity = model.activityText(for: tape) else { return model.pipelineSummary }
+        return "Background activity · \(activity) \(tape.tape.catalogNumber ?? tape.tape.title)"
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 30) {
-                HStack(alignment: .firstTextBaseline, spacing: 14) {
-                    Text("Shelf")
-                        .font(Theme.display(44))
-                        .foregroundStyle(Theme.ink)
-                    Text(summary)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(Theme.inkMuted)
+        let columns = ShelfColumns(size)
+        VStack(alignment: .leading, spacing: 0) {
+            // The header and the column names stay put while the rows scroll.
+            VStack(alignment: .leading, spacing: 0) {
+                PageHeader(eyebrow: "Library", title: "Shelf", subtitle: subtitle, size: size) {
+                    Button("Import audio…") { model.chooseAudioToImport() }
+                        .buttonStyle(.paperStandard)
+                    Button {
+                        model.openRecording()
+                    } label: {
+                        HStack(spacing: 7) {
+                            Image(systemName: "circle.fill")
+                                .font(.system(size: 7))
+                                .accessibilityHidden(true)
+                            Text("Record a tape")
+                        }
+                    }
+                    .buttonStyle(.paperPrimary)
                 }
-                .padding(.horizontal, 32)
+                .padding(.bottom, 14)
 
                 ShelfTabs()
-                    .padding(.horizontal, 32)
+                    .padding(.bottom, 8)
 
-                if tapes.isEmpty {
-                    Text("Nothing here yet.")
-                        .foregroundStyle(Theme.inkMuted)
-                        .padding(.horizontal, 32)
-                }
-                if !largeTapes.isEmpty {
-                    WrappingShelves(tapes: largeTapes, objectHeight: 196, columnWidth: 196)
-                }
-                if !smallTapes.isEmpty {
-                    WrappingShelves(tapes: smallTapes, objectHeight: 136, columnWidth: 164)
+                if !tapes.isEmpty {
+                    ShelfColumnNames(columns: columns)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 20)
-            .padding(.bottom, 32)
+            .padding(.horizontal, padding)
+            .padding(.top, 18)
+
+            if tapes.isEmpty {
+                Text("Nothing here yet.")
+                    .foregroundStyle(Theme.muted)
+                    .padding(.horizontal, padding)
+                    .padding(.top, 12)
+                Spacer(minLength: 0)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(tapes) { tape in
+                            ShelfRow(tape: tape, columns: columns, size: size)
+                        }
+                    }
+                    .padding(.horizontal, padding)
+                    .padding(.bottom, 24)
+                }
+                // Each tab starts at its top.
+                .id(model.filter)
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .onChange(of: footerNote, initial: true) { _, note in model.footerNote = note }
+    }
+}
+
+/// The table's fixed column widths. The reel's title takes what's left.
+private struct ShelfColumns {
+    let number: CGFloat = 58
+    let collection: CGFloat
+    let length: CGFloat = 56
+    let status: CGFloat
+    let spacing: CGFloat = 10
+    /// Space inside each row, at both ends.
+    let inset: CGFloat = 10
+
+    init(_ size: LayoutSize) {
+        collection = size == .regular ? 220 : 104
+        // Wide enough for the longest activity, "Reading the waveform…".
+        status = size == .regular ? 170 : 156
+    }
+}
+
+private struct ShelfColumnNames: View {
+    let columns: ShelfColumns
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: columns.spacing) {
+                CapLabel("Number")
+                    .frame(width: columns.number, alignment: .leading)
+                CapLabel("Reel")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                CapLabel("Collection")
+                    .frame(width: columns.collection, alignment: .leading)
+                CapLabel("Length")
+                    .frame(width: columns.length, alignment: .leading)
+                CapLabel("Status")
+                    .frame(width: columns.status, alignment: .leading)
+            }
+            .padding(.horizontal, columns.inset)
+            .padding(.vertical, 9)
+            HairlineRule()
+        }
+        // The rows are read out by what they hold.
+        .accessibilityHidden(true)
     }
 }
 
@@ -101,151 +174,74 @@ private struct ShelfTabs: View {
     }
 }
 
-/// Fills as many shelves as the window needs, so no tape is ever out of sight.
-private struct WrappingShelves: View {
-    let tapes: [ShelfTape]
-    let objectHeight: CGFloat
-    let columnWidth: CGFloat
-
-    @State private var width: CGFloat = 800
-
-    private let spacing: CGFloat = 30
-    private let margin: CGFloat = 32
-    /// Room above the tapes so a lifted one isn't clipped.
-    private let headroom: CGFloat = 14
-
-    private var rows: [[ShelfTape]] {
-        let perRow = max(1, Int((width - margin * 2 + spacing) / (columnWidth + spacing)))
-        return stride(from: 0, to: tapes.count, by: perRow).map {
-            Array(tapes[$0..<min($0 + perRow, tapes.count)])
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 30) {
-            ForEach(rows, id: \.first?.id) { row in
-                ZStack(alignment: .topLeading) {
-                    Rectangle()
-                        .fill(Theme.board)
-                        .frame(height: 10)
-                        .shadow(color: .black.opacity(0.18), radius: 5, y: 4)
-                        .offset(y: headroom + objectHeight)
-
-                    HStack(alignment: .top, spacing: spacing) {
-                        ForEach(row) { tape in
-                            TapeColumn(tape: tape, objectHeight: objectHeight, width: columnWidth, headroom: headroom)
-                        }
-                    }
-                    .padding(.horizontal, margin)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
-    }
-}
-
-private struct TapeColumn: View {
+/// One tape on the shelf. A click picks it, so Space plays it. A double-click,
+/// Return or a click on its title opens it.
+private struct ShelfRow: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var isHovering = false
     @State private var confirmingDelete = false
     @State private var namingCollection = false
     @State private var newCollectionName = ""
 
     let tape: ShelfTape
-    let objectHeight: CGFloat
-    let width: CGFloat
-    let headroom: CGFloat
+    let columns: ShelfColumns
+    let size: LayoutSize
 
     private var isSelected: Bool { model.selectedTapeID == tape.id }
-    private var isLifted: Bool { isSelected || isHovering }
-
-    private var caption: String {
-        if let activity = model.activityText(for: tape) { return activity }
-        let place = tape.tape.pushedAt == nil ? "Ready to review" : "On the site"
-        return "\(place) · \(TimeLabel.clock(tape.duration))"
-    }
-
-    private var captionColor: Color {
-        switch tape.status {
-        case .failed: Theme.attention
-        case .working: Theme.accent
-        case .idle, .waiting: Theme.inkMuted
-        }
-    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                model.select(tape)
-            } label: {
-                TapeObject(tape: tape)
-                    .shadow(
-                        color: .black.opacity(isSelected ? 0.34 : 0.24),
-                        radius: isSelected ? 11 : 4,
-                        y: isSelected ? 10 : 3
-                    )
-                    .offset(y: isLifted && !reduceMotion ? -7 : 0)
-            }
-            .buttonStyle(.plain)
-            .frame(width: width, height: objectHeight + headroom, alignment: .bottomLeading)
-            .accessibilityLabel(tape.tape.title)
-            .accessibilityAddTraits(isSelected ? .isSelected : [])
-            .onHover { hovering in
-                withAnimation(reduceMotion ? nil : .spring(duration: 0.25)) { isHovering = hovering }
-            }
-            .animation(reduceMotion ? nil : .spring(duration: 0.25), value: isSelected)
-            .draggable(TapeDrag.payload(tape.id)) {
-                TapeObject(tape: tape).scaleEffect(0.6)
-            }
-            .contextMenu {
-                Menu("Collection") {
-                    ForEach(model.collections) { collection in
-                        Toggle(collection.collection.name, isOn: Binding(
-                            get: { tape.tape.collectionId == collection.id },
-                            set: { isOn in
-                                let id = isOn ? collection.id : nil
-                                Task { await model.setCollection(tape, to: id) }
-                            }
-                        ))
-                    }
-                    if !model.collections.isEmpty { Divider() }
-                    Button("New Collection…") {
-                        newCollectionName = ""
-                        namingCollection = true
-                    }
-                    if tape.tape.collectionId != nil {
-                        Button("Remove from Collection") { Task { await model.setCollection(tape, to: nil) } }
-                    }
-                }
-                Divider()
-                Button("Move to Trash…", role: .destructive) { confirmingDelete = true }
-            }
-            .alert("New Collection", isPresented: $namingCollection) {
-                TextField("The Cable Man", text: $newCollectionName)
-                Button("Create") {
-                    let name = newCollectionName
-                    Task { await model.createCollection(named: name, with: [tape]) }
-                }
-                .disabled(newCollectionName.trimmingCharacters(in: .whitespaces).isEmpty)
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("“\(tape.tape.title)” goes in it. Add more reels by dragging them onto it in the sidebar.")
-            }
+        VStack(spacing: 0) {
+            HStack(spacing: columns.spacing) {
+                Text(tape.tape.catalogNumber ?? "—")
+                    .font(Theme.mono())
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(1)
+                    .help(tape.tape.catalogNumber ?? "No number")
+                    .frame(width: columns.number, alignment: .leading)
+                    .accessibilityLabel(tape.tape.catalogNumber ?? "No number")
 
-            Text(tape.tape.title)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(Theme.ink)
-                .lineLimit(2)
-                .padding(.top, 22)
-            Text(caption)
-                .font(.system(size: 12))
-                .foregroundStyle(captionColor)
-                .lineLimit(1)
-                .padding(.top, 3)
+                VStack(alignment: .leading, spacing: 4) {
+                    title
+                    failure
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                collection
+                    .frame(width: columns.collection, alignment: .leading)
+
+                Text(TimeLabel.clock(tape.duration))
+                    .font(Theme.mono())
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(1)
+                    .frame(width: columns.length, alignment: .leading)
+
+                status
+            }
+            .padding(.horizontal, columns.inset)
+            .padding(.vertical, 11)
+            HairlineRule()
         }
-        .frame(width: width, alignment: .leading)
+        .background(isSelected ? Theme.picked : .clear)
+        .contentShape(.rect)
+        .draggable(TapeDrag.payload(tape.id)) {
+            TapeObject(tape: tape).scaleEffect(0.6)
+        }
+        .onTapGesture { model.select(tape) }
+        .simultaneousGesture(TapGesture(count: 2).onEnded { model.openReview(tape) })
+        .contextMenu { menu }
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityAction(named: "Select") { model.select(tape) }
+        .alert("New Collection", isPresented: $namingCollection) {
+            TextField("The Cable Man", text: $newCollectionName)
+            Button("Create") {
+                let name = newCollectionName
+                Task { await model.createCollection(named: name, with: [tape]) }
+            }
+            .disabled(newCollectionName.trimmingCharacters(in: .whitespaces).isEmpty)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("“\(tape.tape.title)” goes in it. Add more reels by dragging them onto it in the sidebar.")
+        }
         .confirmationDialog(
             "Move “\(tape.tape.title)” to the Trash?",
             isPresented: $confirmingDelete,
@@ -255,6 +251,100 @@ private struct TapeColumn: View {
         } message: {
             Text("Its audio can be restored from the Trash. Its details in Remanence are removed, and this doesn’t change the site.")
         }
+    }
+
+    private var title: some View {
+        Button {
+            model.openReview(tape)
+        } label: {
+            Text(tape.tape.title)
+                .font(Theme.serif(size.rowName))
+                .foregroundStyle(Theme.ink)
+                .lineLimit(1)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help(tape.tape.title)
+    }
+
+    /// Why processing stopped, and a way to start it again.
+    @ViewBuilder private var failure: some View {
+        if case .failed(let reason) = tape.status {
+            HStack(spacing: 8) {
+                Text(reason)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.attention)
+                    .lineLimit(1)
+                    .help(reason)
+                Button("Try Again") { Task { await model.retry(tape) } }
+                    .controlSize(.small)
+                    .fixedSize()
+            }
+        }
+    }
+
+    @ViewBuilder private var collection: some View {
+        if let collection = model.collection(of: tape) {
+            Button {
+                model.sidebarSelection = .collection(collection.id)
+            } label: {
+                Text(collection.collection.name)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(1)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .help("Open \(collection.collection.name)")
+        } else {
+            Color.clear
+                .frame(height: 1)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var status: some View {
+        let status = model.status(of: tape)
+        let text = status.label ?? model.activityText(for: tape) ?? ""
+        return StatusBadge(text: text, tone: tone(of: status))
+            // A badge keeps its full width, so a long one is cut at the column's edge.
+            .frame(width: columns.status, alignment: .leading)
+            .clipped()
+            .help(text)
+    }
+
+    private func tone(of status: ShelfStatus) -> StatusBadge.Tone {
+        switch status {
+        case .published: .published
+        case .draftOnSite, .onSiteUnread: .draft
+        case .recording, .working, .failed: .working
+        case .waiting, .approved, .readyToReview: .idle
+        }
+    }
+
+    @ViewBuilder private var menu: some View {
+        Button("Open") { model.openReview(tape) }
+        Menu("Collection") {
+            ForEach(model.collections) { collection in
+                Toggle(collection.collection.name, isOn: Binding(
+                    get: { tape.tape.collectionId == collection.id },
+                    set: { isOn in
+                        let id = isOn ? collection.id : nil
+                        Task { await model.setCollection(tape, to: id) }
+                    }
+                ))
+            }
+            if !model.collections.isEmpty { Divider() }
+            Button("New Collection…") {
+                newCollectionName = ""
+                namingCollection = true
+            }
+            if tape.tape.collectionId != nil {
+                Button("Remove from Collection") { Task { await model.setCollection(tape, to: nil) } }
+            }
+        }
+        Divider()
+        Button("Move to Trash…", role: .destructive) { confirmingDelete = true }
     }
 }
 

@@ -415,7 +415,8 @@ struct CollectionView: View {
     }
 }
 
-/// One reel in a collection's list. Click to select it; drag the handle to move it.
+/// One reel in a collection's list. Click to select it, double-click it or click
+/// its title to open it, and drag the handle to move it.
 private struct ReelRow: View {
     @Environment(AppModel.self) private var model
     let tape: ShelfTape
@@ -448,10 +449,16 @@ private struct ReelRow: View {
                 .foregroundStyle(Theme.inkMuted)
                 .frame(width: 58, alignment: .leading)
                 .fixedSize()
-            Text(tape.tape.title)
-                .font(.system(size: 14))
-                .foregroundStyle(Theme.ink)
-                .lineLimit(1)
+            Button {
+                model.openReview(tape)
+            } label: {
+                Text(tape.tape.title)
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(1)
+            }
+            .buttonStyle(.plain)
+            .help("Open \(tape.tape.title)")
             Spacer(minLength: 8)
             Text(tape.tape.pushedAt == nil ? "Not on the site" : "On the site")
                 .font(.system(size: 11))
@@ -467,7 +474,9 @@ private struct ReelRow: View {
         .background(isSelected ? Theme.railSelected : Theme.card, in: .rect(cornerRadius: 7))
         .contentShape(.rect)
         .onTapGesture { model.select(tape) }
+        .simultaneousGesture(TapGesture(count: 2).onEnded { model.openReview(tape) })
         .contextMenu {
+            Button("Open") { model.openReview(tape) }
             Button("Remove from Collection") { Task { await model.setCollection(tape, to: nil) } }
         }
         .accessibilityAddTraits(isSelected ? .isSelected : [])
