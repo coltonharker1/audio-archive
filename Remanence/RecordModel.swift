@@ -485,7 +485,8 @@ final class RecordModel {
         // long gaps between recordings. The question goes away if the tape runs again.
         if snapshot.machineStopped, !askingIfFinished {
             askingIfFinished = true
-            alert(sound: "Glass", title: "Has the tape finished?", body: "The machine seems to have stopped. Remanence is still recording.")
+            alert(sound: "Glass", title: "Has the tape finished?", body: "The machine seems to have stopped. Remanence is still recording.",
+                  identifier: "tape-finished")
         } else if askingIfFinished, !snapshot.machineStopped {
             askingIfFinished = false
         }
@@ -522,13 +523,13 @@ final class RecordModel {
 
     /// A sound carries across the room to the tape machine. A notification stays
     /// visible if you're away from the screen.
-    private func alert(sound: String, title: String, body: String) {
+    private func alert(sound: String, title: String, body: String, identifier: String? = nil) {
         NSSound(named: sound)?.play()
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         UNUserNotificationCenter.current().add(
-            UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+            UNNotificationRequest(identifier: identifier ?? UUID().uuidString, content: content, trigger: nil)
         )
     }
 

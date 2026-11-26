@@ -11,16 +11,19 @@ import Foundation
 ///
 /// So this watches the 500 Hz–2 kHz band a second at a time. It keeps the quietest
 /// second as the floor, starting from the last half minute of listening before
-/// Record (the machine is usually stopped then, at the knob settings in use), and says the machine has stopped once the
-/// band has sat at that floor for a few seconds, but only if the tape, while
-/// running, was clearly above it. That condition is what keeps gaps and quiet
-/// passages from counting. If the quietest second so far was running tape, then
-/// everything quiet sits near the floor and nothing sits well above it, so nothing
-/// is said until the tape really stops and the floor drops.
+/// Record (the machine is usually stopped then, at the knob settings in use), and
+/// says the machine has stopped once the band has sat at that floor for long enough,
+/// provided the tape, while running, was clearly above it.
 ///
-/// A stretch that is itself quieter than anything heard before might be the first
-/// long gap on a tape where the machine was never heard stopped, so it must last a
-/// minute rather than a few seconds before the question.
+/// How long is long enough depends on where the floor came from. If listening heard
+/// it for several seconds, it's taken to be the stopped machine, and a few seconds
+/// there is enough. Any other floor might just be the quiet of a gap on a tape that
+/// was already rolling, so every stretch at it must last a minute. Nothing heard
+/// during the recording changes that.
+///
+/// "Running" means the seconds above the floor, plus the gaps that turned out to be
+/// gaps. Quiet stretches that look like the machine stopped, such as the wait before
+/// Play or an idle machine, are left out, so they don't make stopped look normal.
 ///
 /// Each second is judged by its middle tenth, because after a reel runs out its
 /// loose end can slap every few seconds as it turns.
@@ -30,22 +33,25 @@ import Foundation
 ///
 /// This only ever leads to a question. Recording never stops by itself.
 public struct MachineStopDetector: Sendable {
-    /// How long the band must sit at the floor before asking.
+    /// How long the band must sit at a confirmed floor before asking.
     public var stoppedSeconds = 8
-    /// How long instead when the stretch set the floor itself, so there was nothing
-    /// to compare it with.
+    /// How long instead when the floor isn't confirmed: it wasn't heard while
+    /// listening, or the floor has since fallen well below what was.
     public var unconfirmedSeconds = 60
     /// How far above the floor still counts as stopped. A stopped machine's band
     /// moves well under a decibel from one second to the next.
     public var nearFloor = 2.5
     /// How far above the floor running tape must sit for the floor to mean stopped.
     public var runningGap = 3.0
-    /// Seconds of recording needed before judging.
+    /// Seconds of running tape needed before judging.
     public var minimumHistory = 30
     /// How many seconds of history are kept.
     public var historyLimit = 3600
     /// How much listening before Record counts towards the floor.
     public var listeningSeconds = 30
+    /// How many of those seconds must be at the floor to confirm it, so one short
+    /// pause on a playing tape doesn't pass for the stopped machine.
+    public var listeningConfirmSeconds = 5
 
     /// Whether the machine looks stopped now. It stays set until the tape runs again
     /// or it's dismissed.
@@ -60,19 +66,26 @@ public struct MachineStopDetector: Sendable {
     private var isRecording = false
     /// Recent seconds while only listening, newest last.
     private var listening: [Double] = []
-    /// The latest seconds' levels in the band, in dB, newest last, and whether each
-    /// is already known to be the machine stopped.
-    private var recent: [(level: Double, stopped: Bool)] = []
-    /// Older seconds of running tape, for how quiet the tape gets. Seconds already
-    /// known to be stopped are left out, so a long idle after "Keep recording"
-    /// doesn't make stopped look normal.
+    /// Levels in the band, in dB, of the seconds believed to be running tape, newest
+    /// last, for how quiet the tape gets.
     private var history: [Double] = []
     private var floor = Double.infinity
-    /// Seconds into the recording, when the floor last dropped by more than
-    /// `nearFloor`, and how many seconds in a row have sat at the floor.
+    /// The floor as listening heard it before Record, if it heard it for long enough.
+    private var heardFloor: Double?
+    /// Seconds into the recording, and how many in a row have sat at the floor.
+    /// Digital silence counts towards neither.
     private var second = 0
-    private var floorSetAt = 0
     private var quietRun = 0
+    /// The current quiet run's levels, held back from `history` until the run ends and
+    /// it's clearer whether the tape was running.
+    private var pending: [Double] = []
+    /// The current quiet run had the question raised, or sat under "Keep recording".
+    private var runWasStopped = false
+    /// The current quiet run began on the recording's first second.
+    private var runOpensRecording = false
+    /// The current quiet run lasted long enough to ask about, before there was enough
+    /// history to judge it.
+    private var runUnjudged = false
     private var dismissed = false
     private var runningAgain = 0
 
@@ -103,12 +116,18 @@ public struct MachineStopDetector: Sendable {
 
     /// Recording starts. What was heard while listening sets the floor to begin with.
     public mutating func beginRecording() {
-        floor = listening.filter { $0 > -130 }.min() ?? .infinity
+        let heard = listening.filter { $0 > -130 }
+        let quietest = heard.min() ?? .infinity
+        floor = quietest
+        let atQuietest = heard.count { $0 <= quietest + nearFloor }
+        heardFloor = atQuietest >= listeningConfirmSeconds ? quietest : nil
         second = 0
-        floorSetAt = -1
         quietRun = 0
+        pending = []
+        runWasStopped = false
+        runOpensRecording = false
+        runUnjudged = false
         listening = []
-        recent = []
         history = []
         tenths = []
         power = 0
@@ -149,30 +168,48 @@ public struct MachineStopDetector: Sendable {
     }
 
     private mutating func finishSecond(_ level: Double) {
+        // Digital silence is a missing input, not a stopped machine, so it changes
+        // nothing: not the floor, a quiet run, the history or the question. A stalled
+        // input is reported separately.
+        guard level > -130 else { return }
         second += 1
-        recent.append((level, false))
-        // Digital silence is a missing input, not a stopped machine, so it never sets
-        // the floor. A stalled input is reported separately.
-        if level > -130, level < floor {
-            if level < floor - nearFloor {
-                floorSetAt = second
-                quietRun = 0
-            }
-            floor = level
+        if level < floor - nearFloor { endRun(lowerFloor: true) }
+        if level < floor { floor = level }
+
+        let atFloor = level <= floor + nearFloor
+        if atFloor {
+            quietRun += 1
+            if pending.isEmpty { runOpensRecording = second == 1 }
+            pending.append(level)
+            if pending.count > historyLimit { pending.removeFirst() }
+        } else {
+            endRun(lowerFloor: false)
         }
-        quietRun = level <= floor + nearFloor ? quietRun + 1 : 0
+
         judge(level)
 
-        if machineStopped {
-            for index in recent.indices { recent[index].stopped = true }
-        } else if dismissed, level <= floor + nearFloor {
-            recent[recent.count - 1].stopped = true
-        }
-        while recent.count > stoppedSeconds + 2 {
-            let oldest = recent.removeFirst()
-            if !oldest.stopped { history.append(oldest.level) }
+        if atFloor {
+            if machineStopped || dismissed { runWasStopped = true }
+        } else if !machineStopped {
+            history.append(level)
         }
         if history.count > historyLimit { history.removeFirst(history.count - historyLimit) }
+    }
+
+    /// The quiet run is over, because the level rose or a much lower floor arrived.
+    /// Its seconds join the history unless it looked like the machine stopped.
+    private mutating func endRun(lowerFloor: Bool) {
+        // A run that opened the recording is usually the wait before Play, and one that
+        // was long enough to ask about met the test for a stop. Both are guesses, made
+        // only when the level then rose: if something quieter turns up instead, the run
+        // was running tape.
+        let looksStopped = runWasStopped || (!lowerFloor && (runOpensRecording || runUnjudged))
+        if !looksStopped { history.append(contentsOf: pending) }
+        pending = []
+        quietRun = 0
+        runWasStopped = false
+        runOpensRecording = false
+        runUnjudged = false
     }
 
     private mutating func judge(_ level: Double) {
@@ -182,22 +219,32 @@ public struct MachineStopDetector: Sendable {
             return
         }
         if machineStopped {
-            // Cleared only by the tape clearly running again.
-            machineStopped = level <= floor + runningGap
+            // Cleared only by the tape clearly running again, so a bump on an idle
+            // machine doesn't withdraw the question and then ask it afresh.
+            runningAgain = level > floor + runningGap ? runningAgain + 1 : 0
+            if runningAgain >= 3 { machineStopped = false }
             return
         }
-        let knownBefore = floorSetAt < second - quietRun + 1
-        guard quietRun >= (knownBefore ? stoppedSeconds : unconfirmedSeconds),
-              let running = runningLevel else { return }
+        guard quietRun >= (floorConfirmed ? stoppedSeconds : unconfirmedSeconds) else { return }
+        guard let running = runningLevel else {
+            runUnjudged = true
+            return
+        }
         machineStopped = running >= floor + runningGap
+        if machineStopped { runningAgain = 0 }
     }
 
-    /// How quiet the tape got while running: a low percentile of the seconds before
-    /// the current quiet stretch.
+    /// Whether the floor can be taken for the stopped machine: it was heard before
+    /// Record, and it hasn't since fallen well below that.
+    private var floorConfirmed: Bool {
+        heardFloor.map { floor >= $0 - nearFloor } ?? false
+    }
+
+    /// How quiet the tape got while running: a low percentile of the history. The
+    /// current quiet run isn't in it yet.
     private var runningLevel: Double? {
-        let before = history.dropLast(max(0, quietRun - recent.count))
-        guard before.count >= minimumHistory else { return nil }
-        let sorted = before.sorted()
+        guard history.count >= minimumHistory else { return nil }
+        let sorted = history.sorted()
         return sorted[sorted.count / 5]
     }
 }

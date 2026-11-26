@@ -1,6 +1,9 @@
 # Telling a stopped machine from a silent tape
 
-Written 2026-11-25. The code is on the `machine-stop` branch and isn't committed yet.
+The detector was made on 2026-11-24 and is committed on the `machine-stop` branch.
+A fix pass on 2026-11-25 changed its rules, following
+[machine-stop-plan.md](machine-stop-plan.md). This describes the rules after that
+pass.
 
 ## The problem
 
@@ -70,38 +73,68 @@ session scratchpad.
 1. **Watch the 500 Hz–2 kHz band.** The input runs through a 500 Hz high-pass
    and a 2 kHz low-pass (second-order Butterworth biquads), and its level is taken
    once a second.
-2. **Remember the floor.** The quietest second heard so far is the floor, and
-   that's normally the machine stopped. The 30 seconds of listening before you
-   press Record count too, because the machine is usually stopped then.
+2. **Remember the floor.** The quietest second heard so far is the floor. The last
+   30 seconds of listening before you press Record count too, because the machine
+   is usually stopped then.
 3. **Compare with the running tape.** The "running level" is the 20th percentile
-   of the seconds heard so far: how quiet the tape gets while it's moving,
-   including its gaps.
+   of the seconds believed to be running tape: how quiet the tape gets while it's
+   moving, including the gaps it has learned. It needs 30 such seconds.
 4. **Ask only when both are true:**
-   - the band has sat at the floor (within 2.5 dB) for **8 seconds**, and
-   - the running tape was clearly louder than the floor, by at least **3 dB**.
+   - the band has sat at the floor (within 2.5 dB) for long enough: **8 seconds**
+     if the floor was heard while listening, **60 seconds** if it wasn't, and
+   - the running level is at least **3 dB** above the floor.
 
-The second condition is what makes gaps harmless. A gap still has tape noise, so it
-sits at the running level and not at the floor. If the quietest thing heard so far
-was itself running tape, then nothing sits well above the floor, and nothing is said
-until the machine really stops and the floor drops.
+What protects gaps is mostly where the floor came from and how long the wait is. The
+8-second rule needs a floor heard while listening before Record. Gaps of blank tape
+that sit more than 2.5 dB above that floor aren't at it, so they never count. Any
+other floor needs a full 60 seconds, every time, so shorter gaps on it never ask.
+The 3 dB check only helps on tapes that dip to the floor often: once at-floor
+seconds make up about a fifth of the running level's history, nothing is asked.
 
-### Details added during testing
+### Details
 
 - **Reel slaps.** After a reel runs out, the loose end can slap the machine every
-  few seconds as it turns. Each second is judged by its **middle tenth** (the
-  median of ten 100 ms readings), so a slap doesn't make a stopped second look like
-  running tape.
-- **When the stopped machine was never heard.** If you start the tape before
-  pressing Record, the first long gap might be quieter than anything heard before,
-  which makes it the new floor. With nothing quieter to compare against, that
-  stretch must last **60 seconds** instead of 8 before it asks.
+  few seconds as it turns. Each second is judged by the **5th-lowest of its ten
+  100 ms readings**, so a slap doesn't make a stopped second look like running
+  tape.
+- **Confirming the floor.** When Record is pressed, the quietest of the listened
+  seconds becomes the floor. It counts as the stopped machine only if at least
+  **5** of those seconds were within 2.5 dB of it, so one short pause caught while
+  listening to a playing tape doesn't pass for it. The floor stays confirmed while
+  it's no more than 2.5 dB below that heard level. If it falls further, in one step
+  or by creeping, it's unconfirmed.
+- **When the stopped machine was never heard.** This happens when Record is pressed
+  within 5 seconds of opening the recording screen, changing the input or finishing
+  a side, and usually when the tape is already playing (see Limits for the
+  exception). Every quiet stretch then needs **60 seconds**. Nothing heard
+  during the recording confirms a floor: not a stop found by the 60-second rule,
+  and not the wait before the tape starts. A long gap followed by Keep Recording
+  looks the same to the detector as a stop followed by rethreading. The price is
+  that a second stop in such a session also takes a minute.
+- **What counts as running tape.** A second above the floor counts at once, unless
+  the question is up. Seconds at the floor are held back until that quiet stretch
+  ends. The stretch is then left out if:
+  - the question was raised during it, or it sat under Keep Recording, or
+  - it began on the recording's first second and ended with the level rising
+    (usually the wait before the tape started), or
+  - it lasted the full 8 or 60 seconds before there was enough history to judge it,
+    and ended with the level rising.
+
+  Anything else counts: a short dip, a shorter gap on an unconfirmed floor, or a
+  stretch cut off by a floor more than 2.5 dB lower with no question raised. The
+  second and third rules are guesses, and they can leave out real running tape (see
+  Limits). Only the last hour of running tape is kept.
 - **Keep Recording.** Dismissing the question keeps it quiet until the tape has
-  clearly run again for 3 seconds. Seconds known to be stopped are kept out of the
-  running level, so a long idle doesn't start to look normal.
-- **It clears itself.** If the tape starts moving again before you answer, the
-  question goes away.
-- **Digital silence** (a missing or stalled input) never sets the floor.
-  Remanence reports a stalled input separately.
+  clearly run again, more than 3 dB above the floor, for 3 seconds in a row.
+- **It clears itself.** If the tape runs that way for 3 seconds in a row before you
+  answer, the question goes away. A shorter bump leaves it up.
+- **Alerts.** Each new question plays a sound. Its notification always has the same
+  identifier, so a repeat should replace the earlier one rather than stack. That
+  hasn't been watched in the running app.
+- **Digital silence** (all zeros, as from a missing input) changes nothing. It never
+  sets the floor or reaches the running level, it neither extends nor breaks a quiet
+  stretch, and it neither raises nor withdraws the question. Remanence reports a
+  stalled input separately.
 - **Only ever a question.** Recording never stops by itself.
 
 ### How the numbers were chosen
@@ -118,10 +151,12 @@ master showed a problem:
   Switching to the middle tenth and widening the margin to 2.5 dB caught it.
 - **3 dB running gap** is below the 4–8 dB measured on the Teac, leaving room for
   quieter tapes.
-- **20th percentile** reflects the quiet parts of the tape (its gaps) without
-  letting a single odd second decide.
+- **20th percentile** reflects the quiet parts of the tape (its gaps), when there
+  are enough of them, without letting a single odd second decide.
+- **60 seconds** keeps shorter gaps quiet when the floor wasn't heard.
+- **5 seconds of listening** is more than a short pause between songs.
 
-Two bugs found along the way changed the design:
+Bugs found along the way changed the design:
 
 - Idle seconds after "Keep Recording" were dragging the running level down until a
   stopped machine looked normal. **Fix:** seconds known to be stopped are left out
@@ -129,47 +164,100 @@ Two bugs found along the way changed the design:
 - The 60-second rule never fired, because the quiet stretch's own seconds dragged
   the percentile down to the floor. **Fix:** the current quiet stretch is left out
   when working out the running level.
+- On a busy tape started before Record, the first long gap became the floor, and
+  every later gap at that level asked after 8 seconds. **Fix:** only a floor heard
+  while listening gets the 8-second rule.
+- The wait before the tape started, and the first part of a stop found by the
+  60-second rule, counted as running tape. Enough of them hid a real stop.
+  **Fix:** quiet stretches that look stopped are left out of the running level.
 
 ## How it was tested
 
 ### Unit tests
 
 `MachineStopDetectorTests` in `RemanenceCore/Tests/RemanenceCoreTests/RecordingTests.swift`
-feeds made-up audio through the detector: quiet noise for a stopped machine,
-slightly louder noise for blank tape, and an 800 Hz tone for program. The tests:
+feeds made-up audio through the detector: quiet noise for a stopped machine, noise
+at set levels around it (blank tape is 6 dB above), an 800 Hz tone for program, and
+zeros for digital silence. Most run at 8 kHz in mono. "Heard" below means the
+detector listened to the stopped machine before Record.
 
 | Test | What it checks |
 |---|---|
-| `blankGapsOnATapeAreNeverFlagged` | Long gaps of blank tape never ask |
-| `theMachineStoppingIsNoticedQuickly` | A stop is noticed after 7–9 seconds |
-| `itWorksWithoutHearingTheMachineStoppedFirst` | Without a known floor, it waits about 60 seconds |
+| `blankGapsOnATapeAreNeverFlagged` | Heard: long gaps of blank tape never ask |
+| `theMachineStoppingIsNoticedQuickly` | Heard: a stop is noticed after about 8 seconds |
+| `itWorksWithoutHearingTheMachineStoppedFirst` | Not heard: it waits about 60 seconds |
+| `aDenseTapeStartedRollingStillFindsTheStop` | Not heard, no gaps: the stop is found after about 60 seconds |
 | `aFirstGapOnADenseTapeIsNotAStop` | The first gap on a busy tape isn't taken for a stop |
-| `aTapeNoQuieterThanAStoppedMachineIsLeftAlone` | If running and stopped sound the same, it says nothing |
+| `aSecondGapOnADenseTapeIsNotAStop` | Nor are later gaps under a minute |
+| `aSecondGapIsNotAStopAfterHearingTheTapePlay` | The same after listening to the tape playing |
+| `listeningBeforeRecordTeachesTheStoppedFloor` | Heard: a long gap isn't a stop, and a stop asks in about 8 seconds |
+| `onlyTheLastHalfMinuteOfListeningCounts` | Older, quieter listening is forgotten |
+| `listeningToAPlayingTapeForgetsTheStoppedMachine` | A stop heard too long before Record doesn't count |
+| `aShortPauseHeardWhileListeningIsNotTheStoppedFloor` | A 3-second pause heard while listening confirms nothing |
+| `aStopAfterOnlyAnOpeningPauseTakesAMinute` | A pause after Record confirms nothing |
+| `aFloorThatCreepsBelowTheHeardOneIsUnconfirmed` | A floor creeping down in small steps loses the 8-second rule |
+| `aFloorWellBelowTheHeardOneIsUnconfirmed` | So does one that drops well below the heard level |
+| `waitingAfterRecordDoesNotHideTheStop` | Heard: a long wait before the tape starts doesn't hide the stop |
+| `waitingAfterRecordDoesNotHideAStopThatWasNeverHeard` | The same when not heard |
+| `aStopFoundAfterAMinuteDoesNotHideTheNext` | A second stop is found too |
+| `aPauseBeforeThereIsHistoryDoesNotHideTheStop` | A long pause early in a tape doesn't hide the stop |
+| `anOpeningGapOnARollingTapeIsNotLearned` | A known cost: after an opening gap, a later 90-second gap asks, a 20-second one doesn't |
+| `nothingIsSaidBeforeThereIsHistory` | No judgment before 30 seconds of running tape |
+| `aTapeTooShortToJudgeIsLeftAlone` | A wait doesn't count towards those 30 seconds |
+| `aTapeThatKeepsDippingToTheFloorIsLeftAlone` | A tape often as quiet as the floor is never asked about |
+| `aThinMarginStillWorks` | Blank tape 3.5 dB up, stop drifted 2 dB up: asks within 40 seconds |
 | `theReelsLooseEndSlappingDoesNotHideTheStop` | Slaps every 3 seconds don't hide the stop |
-| `listeningBeforeRecordTeachesTheStoppedFloor` | Listening before Record sets the floor |
-| `onlyTheLastHalfMinuteOfListeningCounts` | Older listening is forgotten |
-| `nothingIsSaidBeforeThereIsHistory` | No judgment before 30 seconds of recording |
+| `oddBlockSizesGiveTheSameAnswer` | Blocks that don't line up with the 100 ms readings |
+| `itWorksAtNinetySixKilohertzInStereo` | 96 kHz stereo |
+| `tapeOnOneInputOfAStereoPair` | Stereo with the tape on one input only |
+| `digitalSilenceIsNotAStop` | Zeros never raise the question |
+| `digitalSilenceDoesNotHideAStop` | Zeros partway through a stop don't restart the count |
+| `digitalSilenceLeavesTheQuestionUp` | Zeros don't withdraw the question |
+| `digitalSilenceNeverReachesTheRunningLevel` | Many zeros don't make a stop look like running tape |
 | `itStaysStoppedThroughALongIdle` | The question stays up through a long idle |
 | `itClearsWhenTheTapeRunsAgain` | The question clears when the tape runs |
+| `aBumpDoesNotWithdrawTheQuestion` | A 2-second bump doesn't |
 | `keepRecordingWaitsForTheTapeToRunAgain` | Keep Recording waits for the tape to run again |
 
-All 429 tests in `RemanenceCore` pass, and the app builds.
+All 499 tests in `RemanenceCore` pass, as counted by the test runner. That includes
+the 36 in this suite, one of which is the gated check below, skipped unless it's
+asked for. The app isn't covered by these tests.
 
 ### Against the real masters
 
 A gated test, `realMasters`, runs every file in `masters/` through the detector as if
 it were being recorded live, dismissing each question as "Keep Recording" would.
-It prints the second at which it would have asked. It only reads the files.
+It prints the second at which it would have asked. It only reads the files. Quit the
+app before pointing it at the real library.
 
 ```bash
 REMANENCE_STOP_CHECK="$HOME/Music/Remanence" \
-  swift test --package-path RemanenceCore --filter MachineStopDetectorTests
+  swift test -c release --package-path RemanenceCore --filter MachineStopDetectorTests
 ```
 
-I checked each reported second against where the machine actually stopped,
-using each file's level second by second.
+Each file gets two passes:
+
+- **cold:** nothing is heard before Record.
+- **primed:** the file's first second is played six times as listening before
+  Record, as if the app had just heard what the file opens with. If a file opens on
+  running tape, that is what gets taken for the floor.
+
+The two-pass version has been run on a synthetic scratch file only, not on
+the real library (the app was still open). The file is
+`$TMPDIR/remanence-scratch-ms/masters/stop-check-scratch.wav`: 5 s of quieter
+noise, 60 s louder, then 30 s quieter again, left in place. **cold** asked
+never; **primed** asked at 73 s, about 8 s into the last quiet part, as
+expected. The real-library command above still needs the app quit before it is
+run.
+
+For the results below, I checked each reported second against where the machine
+actually stopped, using each file's level second by second.
 
 ## Results
+
+**These were measured on 2026-11-25 with the earlier rules and haven't been re-run.**
+Under the current rules, with nothing heard before Record, those stops would now be
+found after about a minute.
 
 **Teac transfers (RA-008 to RA-015):**
 
@@ -192,25 +280,61 @@ using each file's level second by second.
   RA-015 never ran tape, and RA-014 B stopped only 6 seconds before its recording
   ended.
 
-**Older imports:** it asks mid-tape in the old Logic Pro exports of RA-002 (at
+**Older imports:** it asked mid-tape in the old Logic Pro exports of RA-002 (at
 1276 s and 2616 s) and RA-004 (at 123 s). Their gaps were processed down to no tape
-noise, so they really do look like a stopped machine. Live recordings from the Teac
-always carry tape noise in their gaps, so these files don't stand for how the
-detector will behave while recording.
+noise, so these are the "tape no louder than a stopped machine" case under Limits.
 
 ## Limits
 
-- **A tape no louder than a stopped machine.** If blank tape isn't at least 3 dB
-  above the stopped machine in the midrange, the detector stays quiet rather than
-  guess. This could happen with a very low-noise tape or noise reduction (Dolby or
-  dbx).
+False questions:
+
+- **A tape no louder than a stopped machine.** If blank tape is within 2.5 dB of
+  the stopped machine in the midrange, gaps of 8 seconds or more ask (60 seconds if
+  the stopped machine wasn't heard). That needs at least 30 seconds of louder tape,
+  with shorter dips to the gap level making up less than about a fifth of the
+  running level's history. This could happen with a very low-noise tape or noise
+  reduction (Dolby or dbx).
+- **Listening can hear the tape instead of the machine.** If the tape has been
+  playing for more than 30 seconds before Record, and 5 or more of the last 30 were
+  at its quietest level, that level is taken for the stopped machine. Later gaps at
+  that level can ask after 8 seconds.
+- **A gap over 60 seconds asks** when the floor wasn't heard and the gap is at it.
+- **An opening gap isn't learned.** When the stopped machine wasn't heard, blank
+  leader or a gap that the recording opens in, on a tape already rolling, is left
+  out of the running level. So is a gap of 60 seconds or more that comes before
+  there are 30 seconds of running tape. A later gap of a minute or more at that
+  level can then ask.
+
+Missed or late stops:
+
+- **A minute, not 8 seconds,** whenever the stopped machine wasn't heard before
+  Record.
+- **Under 30 seconds of running tape is never judged.**
+- **The floor only falls.** One moment quieter than the stopped machine, such as the
+  Teac switched off, can lower it for the rest of the side. The stopped machine then
+  sits above the floor, and nothing asks.
+- **Stereo with the tape on one input** loses margin, because the two inputs are
+  averaged. A 6 dB difference becomes about 4 dB.
+- **A tape that dips to the floor often** (about a fifth of its length, in short
+  dips) is never asked about.
+- **Keep Recording during a blank tail** waits for the tape to run again, so if the
+  reel then runs out, nothing asks.
+
+Other:
+
 - **Blank leader counts as stopped.** Leader has no oxide. That's fine, because a
   reel that has reached its leader has finished.
 - **The figures come from one setup:** the Teac and the Scarlett at Teac 75% and
   Scarlett about 25%. The detector compares the input with its own floor, so it
   should cope with other settings, but that hasn't been measured.
-- **Not yet tried live.** Everything above was checked on recorded masters and
-  synthetic audio, not during a real recording.
+
+## Live testing
+
+The detector has still not run during a real recording. Everything above was checked
+on recorded masters (with the earlier rules) and synthetic audio. The trial list is
+under "Left for the live Teac trial" in
+[machine-stop-plan.md](machine-stop-plan.md), with a short checklist in
+[machine-stop-live-trial.md](machine-stop-live-trial.md).
 
 ## Files changed
 
@@ -219,6 +343,6 @@ detector will behave while recording.
 | `RemanenceCore/Sources/RemanenceCore/MachineStopDetector.swift` | New: the detector |
 | `RemanenceCore/Sources/RemanenceCore/LevelAnalysis.swift` | `TapeEndDetector` removed |
 | `RemanenceCore/Sources/RemanenceCore/AudioCapture.swift` | Feeds the detector, including while listening. The snapshot field is now `machineStopped`. |
-| `Remanence/RecordModel.swift` | Asks when the machine stops, and withdraws the question if the tape runs again |
+| `Remanence/RecordModel.swift` | Asks when the machine stops, and withdraws the question if the tape runs again. A repeat reuses the notification identifier. |
 | `RemanenceCore/Tests/RemanenceCoreTests/RecordingTests.swift` | `MachineStopDetectorTests` replace the old tests |
 | `docs/native-app-plan.md` | A note on the change |
