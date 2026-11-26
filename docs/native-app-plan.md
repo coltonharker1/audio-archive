@@ -56,8 +56,9 @@ Live testing also replaced `AVAudioEngine` in `AudioCapture` with an input-only 
 audio unit (see Lessons). No automated test covers that, because it needs hardware.
 
 **1. Calibrate with real hardware.** Needs the user at their machines with the
-Scarlett 2i2. Record one full raw cassette side with some known track breaks, then tune the meter thresholds (`LevelAdvice`) and end-of-tape
-detection (`TapeEndDetector`). Both are provisional. Also check these, none of which
+Scarlett 2i2. Record one full raw cassette side with some known track breaks, then tune the meter thresholds (`LevelAdvice`). They're provisional. End-of-tape
+detection was replaced on 2026-11-24 by `MachineStopDetector`, which listens for the
+machine stopping rather than for silence, tuned on the Teac (RA-014 side B, RA-015). Also check these, none of which
 the MacBook mic could test:
 
 - Capture from an input that isn't the system default

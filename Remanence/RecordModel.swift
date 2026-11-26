@@ -481,9 +481,13 @@ final class RecordModel {
 
         guard isRecording else { return }
 
-        if snapshot.tapeLooksFinished, !askingIfFinished {
+        // Asked when the machine stops, not when the tape goes quiet: reels often have
+        // long gaps between recordings. The question goes away if the tape runs again.
+        if snapshot.machineStopped, !askingIfFinished {
             askingIfFinished = true
-            alert(sound: "Glass", title: "Has the tape finished?", body: "It’s gone quiet. Remanence is still recording.")
+            alert(sound: "Glass", title: "Has the tape finished?", body: "The machine seems to have stopped. Remanence is still recording.")
+        } else if askingIfFinished, !snapshot.machineStopped {
+            askingIfFinished = false
         }
 
         // Clipping is told straight away. Being too quiet waits, so a pause near the

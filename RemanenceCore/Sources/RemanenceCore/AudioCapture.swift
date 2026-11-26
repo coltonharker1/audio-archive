@@ -85,7 +85,8 @@ public struct CaptureSnapshot: Sendable {
     public var seconds: Double = 0
     public var isRecording = false
     public var dropouts = 0
-    public var tapeLooksFinished = false
+    /// The tape machine looks to have stopped while recording. See `MachineStopDetector`.
+    public var machineStopped = false
     public var failure: String?
     public var sampleRate: Double = 0
     /// The peak light. It stays lit for a couple of seconds after a peak near full
@@ -127,7 +128,7 @@ public final class AudioCapture: @unchecked Sendable {
     private var meter = VUBallistics()
     private var recent = RecentPeaks(seconds: 30)
     private var channelCheck = ChannelCheck()
-    private var endDetector = TapeEndDetector()
+    private var stopDetector = MachineStopDetector()
     private var indices: [Int] = [0]
     private var file: CaptureFile?
     private var expectedSampleTime: Double?
@@ -288,6 +289,7 @@ public final class AudioCapture: @unchecked Sendable {
             meter = VUBallistics()
             recent = RecentPeaks(seconds: 30)
             channelCheck = ChannelCheck()
+            stopDetector = MachineStopDetector()
             indices = mode.indices(available: device.channels)
             meterPeak = -140
             meterPeakSeconds = 0
@@ -425,6 +427,7 @@ public final class AudioCapture: @unchecked Sendable {
         lock.withLock {
             indices = mode.indices(available: device.channels)
             channelCheck = ChannelCheck()
+            stopDetector = MachineStopDetector()
         }
     }
 
@@ -473,10 +476,10 @@ public final class AudioCapture: @unchecked Sendable {
         lock.withLock {
             file = capture
             expectedSampleTime = nil
-            endDetector = TapeEndDetector()
+            stopDetector.beginRecording()
             state.seconds = 0
             state.dropouts = 0
-            state.tapeLooksFinished = false
+            state.machineStopped = false
             state.failure = nil
             state.isRecording = true
         }
@@ -489,6 +492,8 @@ public final class AudioCapture: @unchecked Sendable {
             let current = file
             file = nil
             state.isRecording = false
+            state.machineStopped = false
+            stopDetector.endRecording()
             return current
         }
         guard let closing else { return }
@@ -501,11 +506,11 @@ public final class AudioCapture: @unchecked Sendable {
         }
     }
 
-    /// "Keep recording" after the question about the tape ending.
+    /// "Keep recording" after the question about the machine stopping.
     public func dismissTapeEnd() {
         lock.withLock {
-            endDetector.dismiss()
-            state.tapeLooksFinished = false
+            stopDetector.dismiss()
+            state.machineStopped = false
         }
     }
 
@@ -594,6 +599,8 @@ public final class AudioCapture: @unchecked Sendable {
             state.clippedRecently = recent.clipped
             state.advice = recent.advice
             state.channelFinding = channelCheck.finding
+            // Fed while only listening too, to hear the machine stopped before Record.
+            stopDetector.add(selected.map { UnsafeBufferPointer(channels[$0]) }, sampleRate: sampleRate)
 
             if recording != nil {
                 // A gap in the hardware's clock means audio was lost before reaching here.
@@ -604,10 +611,7 @@ public final class AudioCapture: @unchecked Sendable {
                     expectedSampleTime = sampleTime + Double(frames)
                 }
                 state.seconds += blockSeconds
-                endDetector.noteSoundIfReturned()
-                if endDetector.add(rms: levels.rms, seconds: blockSeconds) {
-                    state.tapeLooksFinished = true
-                }
+                state.machineStopped = stopDetector.machineStopped
             }
         }
 

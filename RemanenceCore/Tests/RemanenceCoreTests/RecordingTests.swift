@@ -229,65 +229,217 @@ import Testing
     }
 }
 
-@Suite struct TapeEndDetectorTests {
-    /// Feeds whole seconds at a level, returning the first second it said finished.
-    private func feed(_ detector: inout TapeEndDetector, level: Double, seconds: Int) -> Int? {
-        for second in 0..<seconds {
-            // Four blocks a second, like real audio buffers.
-            var finished = false
-            for _ in 0..<4 where detector.add(rms: level, seconds: 0.25) { finished = true }
-            if finished { return second }
+@Suite struct MachineStopDetectorTests {
+    /// Stand-ins for what the Teac gives through the Scarlett: a stopped machine's
+    /// noise, blank tape about 6 dB above it, and a recording on the tape.
+    enum Sound {
+        case stopped, blankTape, program
+        /// Stopped, with the loose end of the tape slapping the reel every 3 s.
+        case stoppedWithSlaps
+    }
+
+    /// Feeds whole seconds of a sound at 8 kHz in 100 ms blocks, returning the first
+    /// second the machine looked stopped.
+    struct Feeder {
+        var detector: MachineStopDetector = {
+            var detector = MachineStopDetector()
+            detector.beginRecording()
+            return detector
+        }()
+        var seed: UInt64 = 1
+        let rate = 8000.0
+
+        mutating func noise() -> Float {
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Float(Int64(bitPattern: seed >> 1) % 2_000_001 - 1_000_000) / 1_000_000
         }
-        return nil
-    }
 
-    /// Speech with hissy pauses, like a playing tape.
-    private func playTape(_ detector: inout TapeEndDetector, seconds: Int) -> Int? {
-        for second in 0..<seconds {
-            let level = second % 4 == 0 ? -50.0 : -25.0
-            if feed(&detector, level: level, seconds: 1) != nil { return second }
+        @discardableResult
+        mutating func feed(_ sound: Sound, seconds: Int, stopOnFlag: Bool = true) -> Int? {
+            var flagged: Int?
+            var phase = 0.0
+            for second in 0..<seconds {
+                for tenth in 0..<10 {
+                    var block = [Float](repeating: 0, count: Int(rate / 10))
+                    for index in block.indices {
+                        switch sound {
+                        case .stopped: block[index] = 0.000_05 * noise()
+                        case .stoppedWithSlaps:
+                            block[index] = 0.000_05 * noise()
+                            if second % 3 == 0, tenth == 0, index < 200 { block[index] += 0.05 * noise() }
+                        case .blankTape: block[index] = 0.000_1 * noise()
+                        case .program:
+                            phase += 2 * .pi * 800 / rate
+                            block[index] = 0.1 * Float(sin(phase)) + 0.000_1 * noise()
+                        }
+                    }
+                    block.withUnsafeBufferPointer { detector.add([$0], sampleRate: rate) }
+                }
+                if detector.machineStopped, flagged == nil {
+                    flagged = second
+                    if stopOnFlag { return second }
+                }
+            }
+            return flagged
         }
-        return nil
+
+        /// A tape with recordings separated by long blank gaps.
+        mutating func playTape(minutes: Int) -> Int? {
+            for _ in 0..<minutes {
+                if let when = feed(.program, seconds: 20) { return when }
+                if let when = feed(.blankTape, seconds: 40) { return when }
+            }
+            return nil
+        }
     }
 
-    @Test func aPlayingTapeIsNeverFlagged() {
-        var detector = TapeEndDetector()
-        #expect(playTape(&detector, seconds: 500) == nil)
+    @Test func blankGapsOnATapeAreNeverFlagged() {
+        var feeder = Feeder()
+        feeder.feed(.stopped, seconds: 3)
+        #expect(feeder.playTape(minutes: 6) == nil)
+        #expect(feeder.feed(.blankTape, seconds: 300) == nil, "five minutes of blank tape")
+        #expect(feeder.playTape(minutes: 2) == nil)
     }
 
-    @Test func hissDisappearingIsNoticedQuickly() throws {
-        var detector = TapeEndDetector()
-        _ = playTape(&detector, seconds: 120)
-        let when = try #require(feed(&detector, level: -90, seconds: 30))
-        #expect((8...11).contains(when), "about ten seconds below the hiss")
+    @Test func theMachineStoppingIsNoticedQuickly() throws {
+        var feeder = Feeder()
+        feeder.feed(.stopped, seconds: 3)
+        _ = feeder.playTape(minutes: 3)
+        let result1 = feeder.feed(.stopped, seconds: 30)
+        let when = try #require(result1)
+        #expect((7...9).contains(when), "about eight seconds after it stops")
     }
 
-    @Test func aMinuteOfOnlyHissIsNoticedToo() throws {
-        var detector = TapeEndDetector()
-        _ = playTape(&detector, seconds: 200)
-        let when = try #require(feed(&detector, level: -50, seconds: 90))
-        #expect((55...62).contains(when))
+    @Test func itWorksWithoutHearingTheMachineStoppedFirst() throws {
+        // Play pressed before Record, so the stopped floor isn't known until the end.
+        // With nothing to compare with, it waits a minute.
+        var feeder = Feeder()
+        _ = feeder.playTape(minutes: 3)
+        let result2 = feeder.feed(.stopped, seconds: 90)
+        let when = try #require(result2)
+        #expect((58...61).contains(when))
     }
 
-    @Test func aBriefPauseIsNotAnEnding() {
-        var detector = TapeEndDetector()
-        _ = playTape(&detector, seconds: 120)
-        #expect(feed(&detector, level: -50, seconds: 30) == nil)
-        #expect(playTape(&detector, seconds: 60) == nil)
+    @Test func aFirstGapOnADenseTapeIsNotAStop() {
+        // Play pressed before Record, then a tape with no gaps until a 30-second one.
+        var feeder = Feeder()
+        _ = feeder.feed(.program, seconds: 600)
+        #expect(feeder.feed(.blankTape, seconds: 30) == nil)
+        #expect(feeder.feed(.program, seconds: 60) == nil)
     }
 
-    @Test func thereIsNoGuessingBeforeThereIsHistory() {
-        var detector = TapeEndDetector()
-        #expect(feed(&detector, level: -90, seconds: 20) == nil)
+    @Test func aTapeNoQuieterThanAStoppedMachineIsLeftAlone() {
+        // If running tape can't be told from a stopped machine, nothing is said.
+        var feeder = Feeder()
+        feeder.feed(.stopped, seconds: 60)
+        _ = feeder.feed(.program, seconds: 20)
+        #expect(feeder.feed(.stopped, seconds: 120) == nil)
     }
 
-    @Test func aDismissedQuestionStaysQuietUntilSoundReturns() throws {
-        var detector = TapeEndDetector()
-        _ = playTape(&detector, seconds: 120)
-        _ = try #require(feed(&detector, level: -90, seconds: 30))
+    @Test func theReelsLooseEndSlappingDoesNotHideTheStop() throws {
+        var feeder = Feeder()
+        feeder.feed(.stopped, seconds: 3)
+        _ = feeder.playTape(minutes: 3)
+        let result = feeder.feed(.stoppedWithSlaps, seconds: 30)
+        let when = try #require(result)
+        #expect((7...9).contains(when))
+    }
 
-        detector.dismiss()
-        #expect(feed(&detector, level: -90, seconds: 60) == nil)
+    @Test func listeningBeforeRecordTeachesTheStoppedFloor() {
+        // Play pressed before Record, on a tape with no gaps until a long one. Having
+        // heard the machine stopped while listening, the gap isn't mistaken for a stop.
+        var feeder = Feeder()
+        feeder.detector = MachineStopDetector()
+        feeder.feed(.stopped, seconds: 40)
+        feeder.detector.beginRecording()
+        #expect(feeder.feed(.program, seconds: 600) == nil)
+        #expect(feeder.feed(.blankTape, seconds: 90) == nil)
+    }
+
+    @Test func onlyTheLastHalfMinuteOfListeningCounts() {
+        // Knobs turned down long before Record shouldn't leave a floor that's too low.
+        var feeder = Feeder()
+        feeder.detector = MachineStopDetector()
+        for _ in 0..<40 { feeder.feed(.program, seconds: 1) }
+        feeder.detector.beginRecording()
+        #expect(feeder.feed(.program, seconds: 5) == nil)
+    }
+
+    @Test func nothingIsSaidBeforeThereIsHistory() {
+        var feeder = Feeder()
+        _ = feeder.feed(.blankTape, seconds: 10)
+        #expect(feeder.feed(.stopped, seconds: 20) == nil)
+    }
+
+    @Test func itStaysStoppedThroughALongIdle() throws {
+        var feeder = Feeder()
+        feeder.feed(.stopped, seconds: 3)
+        _ = feeder.playTape(minutes: 2)
+        let result3 = feeder.feed(.stopped, seconds: 20)
+        _ = try #require(result3)
+        _ = feeder.feed(.stopped, seconds: 600)
+        #expect(feeder.detector.machineStopped, "ten minutes later, still stopped")
+    }
+
+    @Test func itClearsWhenTheTapeRunsAgain() throws {
+        var feeder = Feeder()
+        feeder.feed(.stopped, seconds: 3)
+        _ = feeder.playTape(minutes: 2)
+        let result4 = feeder.feed(.stopped, seconds: 20)
+        _ = try #require(result4)
+        feeder.feed(.blankTape, seconds: 2)
+        #expect(!feeder.detector.machineStopped)
+    }
+
+    @Test func keepRecordingWaitsForTheTapeToRunAgain() throws {
+        var feeder = Feeder()
+        feeder.feed(.stopped, seconds: 3)
+        _ = feeder.playTape(minutes: 2)
+        let result5 = feeder.feed(.stopped, seconds: 20)
+        _ = try #require(result5)
+
+        feeder.detector.dismiss()
+        #expect(feeder.feed(.stopped, seconds: 120) == nil)
+
+        // Rethreaded and played on, then it stops again.
+        _ = feeder.playTape(minutes: 2)
+        let result6 = feeder.feed(.stopped, seconds: 30)
+        let again = try #require(result6)
+        #expect((7...9).contains(again))
+    }
+
+    /// Runs every master in a real library through the detector and prints each time
+    /// it would have asked. Only reads the files. Set REMANENCE_STOP_CHECK to the
+    /// library folder; build with `-c release`, or it takes a long time.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["REMANENCE_STOP_CHECK"] != nil))
+    func realMasters() throws {
+        let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["REMANENCE_STOP_CHECK"]!)
+            .appending(path: "masters")
+        let files = try FileManager.default.subpathsOfDirectory(atPath: root.path)
+            .filter { $0.hasSuffix(".caf") || $0.hasSuffix(".wav") }.sorted()
+        for path in files {
+            let file = try AVAudioFile(forReading: root.appending(path: path), commonFormat: .pcmFormatFloat32, interleaved: false)
+            let rate = file.processingFormat.sampleRate
+            let channels = Int(file.processingFormat.channelCount)
+            let buffer = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 4096))
+            var detector = MachineStopDetector()
+            detector.beginRecording()
+            var read = 0.0
+            var asked: [String] = []
+            while file.framePosition < file.length {
+                try file.read(into: buffer, frameCount: 4096)
+                let count = Int(buffer.frameLength)
+                guard count > 0, let data = buffer.floatChannelData else { break }
+                detector.add((0..<min(channels, 2)).map { UnsafeBufferPointer(start: data[$0], count: count) }, sampleRate: rate)
+                read += Double(count) / rate
+                // Answer "Keep recording" each time, to find every place it would ask.
+                if detector.machineStopped {
+                    asked.append(String(format: "%.0f s", read))
+                    detector.dismiss()
+                }
+            }
+            print(String(format: "STOPCHECK %@  %.0f s long  asked at: %@", path, read, asked.isEmpty ? "never" : asked.joined(separator: ", ")))
+        }
     }
 }
 
