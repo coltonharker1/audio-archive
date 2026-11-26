@@ -64,8 +64,7 @@ struct RealBackupTests {
         if let library = environment["REMANENCE_LIBRARY"] {
             paths = LibraryPaths(library: URL(filePath: library, directoryHint: .isDirectory), support: LibraryPaths.standard.support)
         } else {
-            let root = FileManager.default.temporaryDirectory
-                .appending(path: "remanence-real-\(UUID().uuidString)", directoryHint: .isDirectory)
+            let root = try TestFolders.make("real")
             paths = LibraryPaths(library: root, support: root)
         }
         try paths.createDirectories()

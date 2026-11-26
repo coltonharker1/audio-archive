@@ -7,9 +7,7 @@ import Testing
     let directory: URL
 
     init() throws {
-        directory = FileManager.default.temporaryDirectory
-            .appending(path: "remanence-sub-\(UUID().uuidString)", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        directory = try TestFolders.make("sub")
     }
 
     private func script(_ body: String) throws -> URL {

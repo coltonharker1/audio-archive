@@ -295,11 +295,32 @@ public struct Pipeline: Sendable {
         try Library(database: database, paths: paths).url(forLibraryPath: path)
     }
 
+    private static let workFolderPrefix = "remanence-job-"
+
     private func makeWorkFolder() throws -> URL {
         let folder = FileManager.default.temporaryDirectory
-            .appending(path: "remanence-job-\(UUID().uuidString)", directoryHint: .isDirectory)
+            .appending(path: "\(Self.workFolderPrefix)\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         return folder
+    }
+
+    /// Removes job folders that a killed app never got to clean up. The age keeps
+    /// this away from the live folders of a second copy of the app. Anything that
+    /// can't be read or removed is left for next time.
+    public static func removeStaleWorkFolders(
+        olderThan age: TimeInterval,
+        in directory: URL = FileManager.default.temporaryDirectory,
+        now: Date = Date()
+    ) {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        for name in names {
+            guard name.hasPrefix(workFolderPrefix),
+                  UUID(uuidString: String(name.dropFirst(workFolderPrefix.count))) != nil else { continue }
+            let folder = directory.appending(path: name)
+            guard let modified = try? folder.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+                  now.timeIntervalSince(modified) > age else { continue }
+            try? FileManager.default.removeItem(at: folder)
+        }
     }
 
     private func runChecked(

@@ -11,8 +11,7 @@ private let hasFFmpeg = FileManager.default.fileExists(atPath: KnownTools.ffmpeg
     let site = FakeSite()
 
     init() throws {
-        root = FileManager.default.temporaryDirectory
-            .appending(path: "remanence-sync-\(UUID().uuidString)", directoryHint: .isDirectory)
+        root = try TestFolders.make("sync")
         let paths = LibraryPaths(
             library: root.appending(path: "library", directoryHint: .isDirectory),
             support: root.appending(path: "support", directoryHint: .isDirectory)

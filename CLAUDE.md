@@ -67,6 +67,9 @@ open -g .build/xcode/Build/Products/Debug/Remanence.app
   call. `scripts/dev/micuse.swift` shows what's in use.
 - Playback and recording tests make or capture real sound, so say so first and keep
   them short. Remove test recordings afterward.
+- Quit the app normally rather than killing it. A killed app leaves its job folders
+  in `$TMPDIR` until a launch more than a day later removes them. Scratch libraries
+  (`-libraryPath`) live in `$TMPDIR/remanence-scratch`.
 - Commit only when asked, on the `native-app` branch.
 
 **SwiftUI traps already hit**

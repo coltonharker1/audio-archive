@@ -188,7 +188,7 @@ extension WaveformTests {
             for _ in 0..<8000 { samples.append(Int16.random(in: -loudness...loudness, using: &numbers)) }
             if second % 11 == 0 { samples[samples.count - 3000] = .max }
         }
-        let url = FileManager.default.temporaryDirectory.appending(path: "wave-\(UUID().uuidString).raw")
+        let url = TestFolders.file("wave.raw")
         defer { try? FileManager.default.removeItem(at: url) }
         try samples.withUnsafeBytes { Data($0) }.write(to: url)
         let wave = try Waveform(encoded: Waveform(decodedAudioAt: url).encoded())

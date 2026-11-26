@@ -253,8 +253,7 @@ private let hasTools = FileManager.default.fileExists(atPath: KnownTools.ffmpeg.
     let root: URL
 
     init() throws {
-        root = FileManager.default.temporaryDirectory
-            .appending(path: "remanence-push-\(UUID().uuidString)", directoryHint: .isDirectory)
+        root = try TestFolders.make("push")
         let paths = LibraryPaths(
             library: root.appending(path: "library", directoryHint: .isDirectory),
             support: root.appending(path: "support", directoryHint: .isDirectory)
@@ -673,7 +672,7 @@ private final class StubProtocol: URLProtocol, @unchecked Sendable {
 
     private var file: PushFile {
         PushFile(
-            url: FileManager.default.temporaryDirectory.appending(path: "stub-\(UUID().uuidString).flac"),
+            url: TestFolders.file("stub.flac"),
             sha256: String(repeating: "a", count: 64), bytes: 3,
             filename: "01 One.flac", contentType: "audio/flac", kind: .audio
         )

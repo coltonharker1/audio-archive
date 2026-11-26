@@ -9,9 +9,7 @@ import Testing
     let directory: URL
 
     init() throws {
-        directory = FileManager.default.temporaryDirectory
-            .appending(path: "remanence-capture-\(UUID().uuidString)", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        directory = try TestFolders.make("capture")
     }
 
     /// One second of a tone, as 24-bit samples.

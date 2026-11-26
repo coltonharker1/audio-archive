@@ -109,7 +109,7 @@ import Testing
     }
 
     @Test func readsTheLatestProgress() throws {
-        let log = FileManager.default.temporaryDirectory.appending(path: "progress-\(UUID().uuidString).txt")
+        let log = TestFolders.file("progress.txt")
         defer { try? FileManager.default.removeItem(at: log) }
         #expect(Pipeline.whisperProgress(inLogAt: log) == nil)
 
@@ -124,6 +124,40 @@ import Testing
 
         try "whisper_print_progress_callback: progress = 100%\n".write(to: log, atomically: true, encoding: .utf8)
         #expect(Pipeline.whisperProgress(inLogAt: log) == 1)
+    }
+}
+
+@Suite struct StaleWorkFolderTests {
+    @Test func onlyOldJobFoldersAreRemoved() throws {
+        let directory = try TestFolders.make("sweep")
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let day: TimeInterval = 24 * 60 * 60
+
+        func folder(_ name: String, age: TimeInterval) throws -> URL {
+            let url = directory.appending(path: name, directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            try "transcript".write(to: url.appending(path: "prompt.txt"), atomically: true, encoding: .utf8)
+            // Set last, because writing inside the folder updates its date.
+            try FileManager.default.setAttributes([.modificationDate: now - age], ofItemAtPath: url.path)
+            return url
+        }
+        let old = try folder("remanence-job-\(UUID().uuidString)", age: day + 60)
+        let kept = [
+            try folder("remanence-job-\(UUID().uuidString)", age: day - 60),
+            try folder("remanence-jobs-\(UUID().uuidString)", age: 30 * day),
+            try folder("remanence-scratch", age: 30 * day),
+            try folder("remanence-job-notes", age: 30 * day),
+            try folder("remanence-job-\(UUID().uuidString)-copy", age: 30 * day),
+            // Only the top level is swept.
+            try folder("remanence-scratch/remanence-job-\(UUID().uuidString)", age: 30 * day),
+        ]
+
+        Pipeline.removeStaleWorkFolders(olderThan: day, in: directory, now: now)
+
+        #expect(!FileManager.default.fileExists(atPath: old.path))
+        for url in kept {
+            #expect(FileManager.default.fileExists(atPath: url.path), "\(url.lastPathComponent)")
+        }
     }
 }
 

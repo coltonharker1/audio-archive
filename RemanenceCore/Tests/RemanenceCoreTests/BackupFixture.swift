@@ -15,8 +15,7 @@ struct BackupFixture {
     let library: LibraryPaths
 
     init() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appending(path: "remanence-backup-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let root = try TestFolders.make("backup")
         folder = root.appending(path: "backup", directoryHint: .isDirectory)
         library = LibraryPaths(
             library: root.appending(path: "library", directoryHint: .isDirectory),

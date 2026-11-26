@@ -33,7 +33,7 @@ import Testing
         var samples = [Int16](repeating: 0, count: 8000)
         samples += [Int16](repeating: 16384, count: 8000)
         samples += [Int16](repeating: 5, count: 30) // A partial bin at the end is dropped.
-        let url = FileManager.default.temporaryDirectory.appending(path: "wave-\(UUID().uuidString).raw")
+        let url = TestFolders.file("wave.raw")
         defer { try? FileManager.default.removeItem(at: url) }
         try samples.withUnsafeBytes { Data($0) }.write(to: url)
 
@@ -49,7 +49,7 @@ import Testing
     @Test func readsAudioLongerThanOneReadChunk() throws {
         let seconds = 130
         let samples = [Int16](repeating: 1000, count: 8000 * seconds)
-        let url = FileManager.default.temporaryDirectory.appending(path: "wave-\(UUID().uuidString).raw")
+        let url = TestFolders.file("wave.raw")
         defer { try? FileManager.default.removeItem(at: url) }
         try samples.withUnsafeBytes { Data($0) }.write(to: url)
 
@@ -146,8 +146,7 @@ import Testing
     let source: Int64
 
     init() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appending(path: "remanence-markers-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let root = try TestFolders.make("markers")
         let paths = LibraryPaths(library: root, support: root)
         try paths.createDirectories()
         database = try AppDatabase.open(at: paths.database)

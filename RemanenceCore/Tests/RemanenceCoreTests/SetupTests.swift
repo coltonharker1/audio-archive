@@ -14,9 +14,7 @@ private final class Reported: @unchecked Sendable {
     let directory: URL
 
     init() throws {
-        directory = FileManager.default.temporaryDirectory
-            .appending(path: "remanence-setup-\(UUID().uuidString)", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        directory = try TestFolders.make("setup")
     }
 
     private func script(_ name: String, _ body: String, executable: Bool = true) throws -> URL {

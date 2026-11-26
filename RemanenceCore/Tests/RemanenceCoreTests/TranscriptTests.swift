@@ -31,8 +31,7 @@ import Testing
     let tape: Int64
 
     init() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appending(path: "remanence-transcripts-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let root = try TestFolders.make("transcripts")
         let paths = LibraryPaths(library: root, support: root)
         try paths.createDirectories()
         database = try AppDatabase.open(at: paths.database)

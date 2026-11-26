@@ -8,8 +8,7 @@ import Testing
     let root: URL
 
     init() throws {
-        root = FileManager.default.temporaryDirectory
-            .appending(path: "remanence-sides-\(UUID().uuidString)", directoryHint: .isDirectory)
+        root = try TestFolders.make("sides")
         let paths = LibraryPaths(
             library: root.appending(path: "library", directoryHint: .isDirectory),
             support: root.appending(path: "support", directoryHint: .isDirectory)

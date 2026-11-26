@@ -8,7 +8,7 @@ import Testing
 
     /// Ten seconds of a steady 1 kHz tone.
     private func tone() throws -> URL {
-        let url = FileManager.default.temporaryDirectory.appending(path: "tape-scrub-\(UUID().uuidString).caf")
+        let url = TestFolders.file("tape-scrub.caf")
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1))
         let file = try AVAudioFile(forWriting: url, settings: format.settings, commonFormat: .pcmFormatFloat32, interleaved: false)
         let frames = AVAudioFrameCount(rate * 10)

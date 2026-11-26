@@ -99,7 +99,7 @@ import Testing
 
     /// Opening a tape at a search result seeks right after loading.
     @Test func aSeekStraightAfterLoadingLands() async throws {
-        let file = FileManager.default.temporaryDirectory.appending(path: "remanence-player-\(UUID().uuidString).wav")
+        let file = TestFolders.file("player.wav")
         try BackupFixture.wav(seconds: 4, seed: "seek").write(to: file)
         defer { try? FileManager.default.removeItem(at: file) }
 
@@ -110,7 +110,7 @@ import Testing
     }
 
     @Test func aFilePlaysAndSeeks() async throws {
-        let file = FileManager.default.temporaryDirectory.appending(path: "remanence-player-\(UUID().uuidString).wav")
+        let file = TestFolders.file("player.wav")
         try BackupFixture.wav(seconds: 4, seed: "player").write(to: file)
         defer { try? FileManager.default.removeItem(at: file) }
 
@@ -136,7 +136,7 @@ import Testing
     }
 
     @Test func theEndOfAFileIsReported() async throws {
-        let file = FileManager.default.temporaryDirectory.appending(path: "remanence-player-\(UUID().uuidString).wav")
+        let file = TestFolders.file("player.wav")
         try BackupFixture.wav(seconds: 1, seed: "ending").write(to: file)
         defer { try? FileManager.default.removeItem(at: file) }
 

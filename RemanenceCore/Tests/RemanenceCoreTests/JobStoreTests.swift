@@ -8,8 +8,7 @@ import Testing
     let start = Date(timeIntervalSince1970: 1_800_000_000)
 
     init() throws {
-        let path = FileManager.default.temporaryDirectory
-            .appending(path: "remanence-jobs-\(UUID().uuidString)/library.sqlite")
+        let path = try TestFolders.make("jobs").appending(path: "library.sqlite")
         database = try AppDatabase.open(at: path)
     }
 
@@ -267,8 +266,7 @@ import Testing
     let database: AppDatabase
 
     init() throws {
-        let path = FileManager.default.temporaryDirectory
-            .appending(path: "remanence-queue-\(UUID().uuidString)/library.sqlite")
+        let path = try TestFolders.make("queue").appending(path: "library.sqlite")
         database = try AppDatabase.open(at: path)
         try database.writer.write { db in
             var tape = Tape(uuid: "t", title: "T", createdAt: Date())

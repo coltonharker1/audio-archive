@@ -7,8 +7,7 @@ import Testing
     let database: AppDatabase
 
     init() throws {
-        let path = FileManager.default.temporaryDirectory
-            .appending(path: "remanence-tests-\(UUID().uuidString)/library.sqlite")
+        let path = try TestFolders.make("tests").appending(path: "library.sqlite")
         database = try AppDatabase.open(at: path)
     }
 
@@ -146,8 +145,7 @@ import Testing
     }
 
     @Test func reopeningKeepsData() throws {
-        let path = FileManager.default.temporaryDirectory
-            .appending(path: "remanence-tests-\(UUID().uuidString)/library.sqlite")
+        let path = try TestFolders.make("tests").appending(path: "library.sqlite")
         try AppDatabase.open(at: path).writer.write { db in
             try db.execute(sql: "INSERT INTO tape (uuid, title, created_at) VALUES ('u', 'Kept', '2026-11-02')")
         }

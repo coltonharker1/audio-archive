@@ -10,8 +10,7 @@ private let hasTools = FileManager.default.fileExists(atPath: KnownTools.ffmpeg.
     let root: URL
 
     init() throws {
-        root = FileManager.default.temporaryDirectory
-            .appending(path: "remanence-import-\(UUID().uuidString)", directoryHint: .isDirectory)
+        root = try TestFolders.make("import")
         let paths = LibraryPaths(
             library: root.appending(path: "library", directoryHint: .isDirectory),
             support: root.appending(path: "support", directoryHint: .isDirectory)

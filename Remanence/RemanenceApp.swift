@@ -51,6 +51,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { AppModel.shared.rememberPosition() }
         }
+        // Job folders left by a run that was killed. A day old, so none is in use.
+        Task.detached(priority: .utility) {
+            Pipeline.removeStaleWorkFolders(olderThan: 24 * 60 * 60)
+        }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
             let shift = modifiers == .shift

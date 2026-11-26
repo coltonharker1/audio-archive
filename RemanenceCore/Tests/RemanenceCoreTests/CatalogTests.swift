@@ -7,8 +7,7 @@ import Testing
     let library: Library
 
     init() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appending(path: "remanence-catalog-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let root = try TestFolders.make("catalog")
         let paths = LibraryPaths(
             library: root.appending(path: "library", directoryHint: .isDirectory),
             support: root.appending(path: "support", directoryHint: .isDirectory)
