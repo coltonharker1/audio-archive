@@ -418,11 +418,13 @@ struct SitePostView: View {
         // The side, as Review shows it. The recording's name would repeat the title.
         let side = tape.items.first { $0.source.id == track.sourceID }?.source.side.map { "Side \($0)" }
 
+        let number = String(format: "%02d", index + 1)
+
         Button {
             openTrackID = isOpen ? nil : track.id
         } label: {
             NumberedTrackRow(
-                number: String(format: "%02d", index + 1),
+                number: number,
                 detail: [side, TimeLabel.clock(track.start)].compactMap(\.self).joined(separator: " · "),
                 duration: TimeLabel.clock(track.duration),
                 size: size,
@@ -442,8 +444,10 @@ struct SitePostView: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(typed.isEmpty ? unnamed : typed)
-        .accessibilityValue(TimeLabel.clock(track.duration))
+        .accessibilityLabel("\(number), \(typed.isEmpty ? unnamed : typed)")
+        .accessibilityValue([
+            side, "starts at \(TimeLabel.clock(track.start))", "length \(TimeLabel.clock(track.duration))",
+        ].compactMap(\.self).joined(separator: ", "))
         .accessibilityHint(isOpen ? "Closes its name and description" : "Opens its name and description")
 
         if isOpen {

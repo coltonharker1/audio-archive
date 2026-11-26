@@ -833,9 +833,10 @@ private struct Inspector: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 7)
                 }
-                // No inset below: the window footer already sits under it.
+                // The inset below keeps its border off the window footer's rule.
                 ReturnToSide()
                     .padding(.top, 5)
+                    .padding(.bottom, 4)
             }
         }
         .padding(.leading, size == .regular ? 24 : 14)
@@ -889,6 +890,8 @@ private struct Inspector: View {
                 .help(displayName(lane))
                 .accessibilityAddTraits(.isHeader)
         }
+        // Starts down from the tab rule, about level with the track list's title.
+        .padding(.top, 8)
         .padding(.bottom, 2)
     }
 }
@@ -1004,25 +1007,27 @@ private struct TrackSettings: View {
                     .buttonStyle(.paperSmall)
                     .help("1% slower")
                     .accessibilityLabel("Slower")
-                Menu(Self.percent(settings.speed)) {
-                    Picker("Speed preset", selection: Binding(
-                        get: { [0.5, 1, 2].first { abs($0 - settings.speed) < 0.0005 } ?? 0 },
-                        set: { if $0 > 0 { setSpeed($0) } }
-                    )) {
-                        Text("½×").tag(0.5)
-                        Text("1×").tag(1.0)
-                        Text("2×").tag(2.0)
-                    }
-                    .pickerStyle(.inline)
-                    .labelsHidden()
+                ZStack {
+                    // An unseen menu as wide as any value gets, such as 109.0% or
+                    // 399.0%, so none is cut off and − stays put as the value changes.
+                    speedMenuStyle(Menu("000.0%") {})
+                        .hidden()
+                        .accessibilityHidden(true)
+                    speedMenuStyle(Menu(Self.percent(settings.speed)) {
+                        Picker("Speed preset", selection: Binding(
+                            get: { [0.5, 1, 2].first { abs($0 - settings.speed) < 0.0005 } ?? 0 },
+                            set: { if $0 > 0 { setSpeed($0) } }
+                        )) {
+                            Text("½×").tag(0.5)
+                            Text("1×").tag(1.0)
+                            Text("2×").tag(2.0)
+                        }
+                        .pickerStyle(.inline)
+                        .labelsHidden()
+                    })
+                    .help("½× plays a tape recorded at half the speed it was captured at, 2× the reverse")
+                    .accessibilityLabel("Speed \(Self.percent(settings.speed))")
                 }
-                .menuStyle(.borderlessButton)
-                .monospacedDigit()
-                .fixedSize()
-                // Room for the widest value, so − stays put as the value changes.
-                .frame(minWidth: 58)
-                .help("½× plays a tape recorded at half the speed it was captured at, 2× the reverse")
-                .accessibilityLabel("Speed \(Self.percent(settings.speed))")
                 Button("+") { setSpeed(settings.speed + 0.01) }
                     .buttonStyle(.paperSmall)
                     .help("1% faster")
@@ -1032,6 +1037,14 @@ private struct TrackSettings: View {
             .padding(.vertical, 4)
             HairlineRule()
         }
+    }
+
+    /// Shared by the speed menu and the one that sizes it, so they measure alike.
+    private func speedMenuStyle(_ menu: some View) -> some View {
+        menu
+            .menuStyle(.borderlessButton)
+            .monospacedDigit()
+            .fixedSize()
     }
 
     private var direction: some View {

@@ -1059,8 +1059,9 @@ private struct AddReelsSheet: View {
                 .contentShape(.rect)
             }
             .toggleStyle(.checkbox)
-            .accessibilityLabel([tape.tape.catalogNumber, tape.tape.title].compactMap(\.self).joined(separator: ", "))
-            .accessibilityHint(current.map { "In \($0)" } ?? "")
+            .accessibilityLabel([
+                tape.tape.catalogNumber, tape.tape.title, current.map { "In \($0)" }, TimeLabel.clock(tape.duration),
+            ].compactMap(\.self).joined(separator: ", "))
             .padding(.vertical, 9)
             HairlineRule()
         }

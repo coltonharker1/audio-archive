@@ -23,10 +23,19 @@ struct SearchResultsView: View {
         return results.isEmpty ? "Nothing matches “\(model.searchText)”." : summary
     }
 
+    /// Agrees with the breadcrumb, which names where clearing the search goes.
+    private var eyebrow: String {
+        switch model.routeAfterSearch {
+        case .setup: "Setup"
+        case .shelf where model.selectedCollection != nil: "Collection"
+        default: "Library"
+        }
+    }
+
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 26) {
-                PageHeader(eyebrow: "Library", title: "Search", subtitle: subtitle, size: size)
+                PageHeader(eyebrow: eyebrow, title: "Search", subtitle: subtitle, size: size)
 
                 ForEach(results) { result in
                     TapeResult(result: result, size: size)
@@ -87,7 +96,8 @@ private struct TapeResult: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(Text(highlighted(moment.snippet)))
-                .accessibilityHint("Plays from \(TimeLabel.clock(moment.time))")
+                .accessibilityValue(TimeLabel.clock(moment.time))
+                .accessibilityHint("Plays from this moment")
             }
         }
     }

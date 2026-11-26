@@ -664,10 +664,10 @@ private struct MarkerRow: View {
                 .accessibilityLabel(review.isHearingJoin ? "Playing…" : "Hear the join")
             Button("−0.1 s") { endTyping(); review.nudgeSelection(by: -0.1) }
                 .help("Move the marker earlier (←)")
-                .accessibilityLabel("−0.1 s")
+                .accessibilityLabel("Move marker 0.1 seconds earlier")
             Button("+0.1 s") { endTyping(); review.nudgeSelection(by: 0.1) }
                 .help("Move the marker later (→)")
-                .accessibilityLabel("+0.1 s")
+                .accessibilityLabel("Move marker 0.1 seconds later")
             Button("Delete", role: .destructive) { endTyping(); review.deleteSelectedMarker() }
                 .help("Delete this marker (Delete key)")
                 .accessibilityLabel("Delete")

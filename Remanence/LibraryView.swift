@@ -256,14 +256,15 @@ private struct SidebarRow: View {
                     Circle()
                         .fill(Theme.needle)
                         .frame(width: 8, height: 8)
-                        .accessibilityLabel("Recording now")
+                        // The row says this as its value.
+                        .accessibilityHidden(true)
                 }
             }
             .foregroundStyle(Theme.ink)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
-        .accessibilityValue(showsRecordingDot ? "Recording now" : "")
+        .accessibilityValue("Recording now", isEnabled: showsRecordingDot)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
